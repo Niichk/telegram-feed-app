@@ -24,6 +24,18 @@ if API_HASH is None:
     raise ValueError("API_HASH environment variable is not set")
 SESSION_NAME = "worker_session"
 SESSION_STRING = os.getenv("TELETHON_SESSION")
+
+# --- БЛОК ДЛЯ ОТЛАДКИ ---
+print("--- DEBUG INFO ---")
+if SESSION_STRING:
+    print(f"Найдена сессионная строка. Длина: {len(SESSION_STRING)}")
+    print(f"Начало: {SESSION_STRING[:10]}...")
+    print(f"Конец: ...{SESSION_STRING[-10:]}")
+else:
+    print("Переменная TELETHON_SESSION не найдена или пуста!")
+print("------------------")
+# -------------------------
+
 if SESSION_STRING is None:
     raise ValueError("TELETHON_SESSION environment variable is not set")
 POST_LIMIT = 10
