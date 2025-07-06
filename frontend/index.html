@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>len.</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 12px; background-color: #f0f2f5; color: #1c1e21; }
+        .feed-container { max-width: 600px; margin: 0 auto; }
+        .post-card { background-color: #ffffff; border-radius: 8px; margin-bottom: 12px; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1); border: 1px solid #ddd; overflow: hidden; }
+        .post-content { padding: 16px; }
+        .post-header { display: flex; align-items: center; margin-bottom: 12px; }
+        .channel-title { font-weight: 600; font-size: 1.1em; }
+        .post-date { color: #65676b; font-size: 0.9em; margin-left: auto; }
+        .post-text { white-space: pre-wrap; line-height: 1.5; font-size: 1em; margin-bottom: 16px; }
+        .comment-button { display: inline-block; padding: 8px 16px; background-color: #e7f3ff; color: #1877f2; text-decoration: none; border-radius: 6px; font-weight: 500; transition: background-color 0.2s; }
+        .comment-button:hover { background-color: #dbeaff; }
+        .status-message { text-align: center; padding: 40px; font-size: 1.2em; color: #65676b; }
+        .post-media-visual { width: 100%; max-height: 70vh; object-fit: cover; display: block; }
+        .post-media-audio { width: 100%; margin-top: 12px; }
+        .post-card-with-media .post-content { padding-top: 12px; }
+        .loader-container { display: flex; justify-content: center; padding: 20px; }
+        .loader {
+            border: 5px solid #f3f3f3;
+            border-top: 5px solid #3498db;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel">
+        const { useState, useEffect, useCallback, useRef } = React;
+
+        // --- Компоненты PostMedia и PostCard без изменений ---
+        function PostMedia({ post }) {
+            if (!post.media_url) return null;
+            if (post.media_type === 'photo') return <img src={post.media_url} className="post-media-visual" alt="Изображение из поста" />;
+            if (post.media_type === 'video') return <video controls className="post-media-visual"><source src={post.media_url} /></video>;
+            if (post.media_type === 'audio') return <audio controls className="post-media-audio"><source src={post.media_url} /></audio>;
+            return null;
+        }
+        function PostCard({ post }) {
+            const formatDate = (dateString) => new Date(dateString).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+            const getPostUrl = (p) => p.channel.username ? `https://t.me/${p.channel.username}/${p.message_id}` : `https://t.me/c/${String(p.channel.id).substring(4)}/${p.message_id}`;
+            const postUrl = getPostUrl(post);
+            const isAudio = post.media_type === 'audio';
+            return (
+                <div className={`post-card ${post.media_url && !isAudio ? 'post-card-with-media' : ''}`}>
+                    {!isAudio && <PostMedia post={post} />}
+                    <div className="post-content">
+                        <div className="post-header"><div className="channel-title">{post.channel.title}</div><div className="post-date">{formatDate(post.date)}</div></div>
+                        {isAudio && <PostMedia post={post} />}
+                        {post.text && <div className="post-text">{post.text}</div>}
+                        <a href={postUrl} target="_blank" rel="noopener noreferrer" className="comment-button">Комментировать</a>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- Основной компонент приложения ---
+        function App() {
+            const [posts, setPosts] = useState([]);
+            const [error, setError] = useState(null);
+            const [userId, setUserId] = useState(null);
+            const [page, setPage] = useState(1);
+            const [hasMore, setHasMore] = useState(true);
+            
+            // --- ИСПРАВЛЕНИЕ ЛОГИКИ ЗАГРУЗКИ ---
+            const [isFetching, setIsFetching] = useState(false); // Идет ли загрузка в данный момент
+            const [initialLoading, setInitialLoading] = useState(true); // Идет ли самая первая загрузка
+            const loader = useRef(null);
+
+            const fetchPosts = useCallback(async () => {
+                // Предохранитель от повторных вызовов
+                if (!userId || !hasMore || isFetching) return;
+                
+                setIsFetching(true);
+                try {
+                    const response = await fetch(`http://127.0.0.1:8000/api/feed/${userId}?page=${page}`);
+                    if (!response.ok) throw new Error(`Ошибка: ${response.status}`);
+                    
+                    const newPosts = await response.json();
+                    
+                    setPosts(prevPosts => [...prevPosts, ...newPosts]);
+                    setHasMore(newPosts.length > 0);
+                    setPage(prevPage => prevPage + 1);
+
+                } catch (err) {
+                    setError(err.message);
+                } finally {
+                    setIsFetching(false);
+                    setInitialLoading(false); // Завершаем первоначальную загрузку
+                }
+            }, [page, userId, hasMore, isFetching]);
+
+            // Эффект для отслеживания прокрутки
+            useEffect(() => {
+                const handleObserver = (entities) => {
+                    const target = entities[0];
+                    if (target.isIntersecting && hasMore && !isFetching) {
+                        fetchPosts();
+                    }
+                };
+                
+                const observer = new IntersectionObserver(handleObserver, { threshold: 1 });
+                const currentLoader = loader.current;
+                if (currentLoader) {
+                    observer.observe(currentLoader);
+                }
+                return () => {
+                    if (currentLoader) {
+                        observer.unobserve(currentLoader);
+                    }
+                };
+            }, [loader, fetchPosts, hasMore, isFetching]);
+
+            // Эффект для инициализации
+            useEffect(() => {
+                const tg = window.Telegram.WebApp;
+                const testUserId = 592766269; // ВАШ ID ДЛЯ ТЕСТОВ
+                const currentUserId = tg.initDataUnsafe?.user?.id || testUserId;
+                setUserId(currentUserId);
+                
+                tg.ready();
+                document.body.style.backgroundColor = tg.themeParams.bg_color || '#f0f2f5';
+                document.body.style.color = tg.themeParams.text_color || '#1c1e21';
+            }, []);
+
+            // Запускаем первую загрузку только после получения userId
+            useEffect(() => {
+                if (userId) {
+                    fetchPosts();
+                }
+            }, [userId]);
+
+            // --- ОБНОВЛЕННАЯ ЛОГИКА ОТОБРАЖЕНИЯ ---
+            if (initialLoading) return <div className="status-message"><div className="loader"></div></div>;
+            if (error) return <div className="status-message">Ошибка: {error}</div>;
+            if (posts.length === 0 && !hasMore) return <div className="status-message">Ваша лента пока пуста. Добавьте каналы через бота!</div>;
+
+            return (
+                <div className="feed-container">
+                    {posts.map(post => <PostCard key={post.message_id} post={post} />)}
+                    
+                    {/* Индикатор загрузки в конце ленты */}
+                    {isFetching && hasMore && (
+                        <div className="loader-container">
+                            <div className="loader"></div>
+                        </div>
+                    )}
+                    {/* Невидимый элемент для отслеживания прокрутки */}
+                    <div ref={loader} />
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

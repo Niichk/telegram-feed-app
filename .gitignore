@@ -1,0 +1,17 @@
+# Папка с виртуальным окружением Python
+/backend/venv/
+
+# Файл с секретными данными
+.env
+/backend/.env
+
+# Файлы сессии Telethon
+*.session
+*.session-journal
+
+# Системные папки Python
+__pycache__/
+*.pyc
+
+# Папки зависимостей Node.js (если появятся)
+node_modules/
