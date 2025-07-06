@@ -76,7 +76,7 @@ async def fetch_and_save_posts():
                         file_path = await client.download_media(message, file="static/media")
                         if file_path is not None:
                             file_name = os.path.basename(file_path)
-                            media_url = f"telegram-feed-app-production.up.railway.app/static/media/{file_name}"
+                            media_url = f"https://telegram-feed-app-production.up.railway.app/static/media/{file_name}"
                             logging.info(f"Скачан файл: {file_name}")
                         else:
                             logging.warning("Не удалось скачать медиафайл.")
