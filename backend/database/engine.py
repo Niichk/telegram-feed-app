@@ -7,14 +7,24 @@ load_dotenv()
 # --- Строка подключения к базе данных ---
 # Формат: postgresql+asyncpg://USER:PASSWORD@HOST:PORT/DB_NAME
 # Данные берем из нашего docker-compose.yml
-DB_URL = os.getenv("DB_URL")
+DB_URL = os.getenv("DATABASE_URL")
 
 if DB_URL is None:
     raise ValueError("Environment variable DB_URL is not set")
 
-engine = create_async_engine(DB_URL, echo=False)
+if DB_URL and DB_URL.startswith("postgresql://"):
+    DB_URL = DB_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
 
-# Создаем фабрику сессий для взаимодействия с базой
+if not DB_URL:
+    PGHOST = os.getenv("PGHOST")
+    PGUSER = os.getenv("PGUSER")
+    PGPASSWORD = os.getenv("PGPASSWORD")
+    PGDATABASE = os.getenv("PGDATABASE")
+    PGPORT = os.getenv("PGPORT")
+    DB_URL = f"postgresql+asyncpg://{PGUSER}:{PGPASSWORD}@{PGHOST}:{PGPORT}/{PGDATABASE}"
+# ---------------------------------
+
+engine = create_async_engine(DB_URL, echo=False)
 session_maker = async_sessionmaker(engine, expire_on_commit=False)
 
 
