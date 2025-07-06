@@ -9,6 +9,8 @@ from sqlalchemy import select
 from database.engine import session_maker
 from database.models import Channel, Post
 
+from telethon.sessions import StringSession
+
 # Настройка
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -21,10 +23,13 @@ API_HASH = os.getenv("API_HASH")
 if API_HASH is None:
     raise ValueError("API_HASH environment variable is not set")
 SESSION_NAME = "worker_session"
+SESSION_STRING = os.getenv("TELETHON_SESSION")
+if SESSION_STRING is None:
+    raise ValueError("TELETHON_SESSION environment variable is not set")
 POST_LIMIT = 10
 SLEEP_TIME = 300
 
-client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
+client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
 async def fetch_and_save_posts():
     logging.info("Начинаю сбор постов...")
