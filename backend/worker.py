@@ -103,7 +103,7 @@ async def fetch_and_save_posts():
 
                                 s3_client.upload_fileobj(
                                     file_in_memory, S3_BUCKET_NAME, file_name,
-                                    ExtraArgs={'ACL': 'public-read', 'ContentType': message.file.mime_type}
+                                    ExtraArgs={'ContentType': message.file.mime_type}
                                 )
 
                                 media_url = f"https://{S3_BUCKET_NAME}.s3.{S3_REGION}.amazonaws.com/{file_name}"
