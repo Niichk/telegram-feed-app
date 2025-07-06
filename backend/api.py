@@ -13,10 +13,16 @@ app = FastAPI(title="Feed Reader API")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # --- ВАЖНО: Настройка CORS ---
-# Это нужно, чтобы ваш фронтенд (Mini App) мог обращаться к этому API
+
+origins = [
+    "https://frontend-app-production-c1ed.up.railway.app", # <-- ВАШ АДРЕС ФРОНТЕНДА
+    "http://localhost", # Для локальных тестов в будущем
+    "http://127.0.0.1",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # В продакшене лучше указать конкретный домен вашего фронтенда
+    allow_origins=origins, # <-- ИСПОЛЬЗУЕМ СПИСОК
     allow_credentials=True,
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
