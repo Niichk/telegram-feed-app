@@ -88,7 +88,7 @@
                 
                 setIsFetching(true);
                 try {
-                    const response = await fetch(`http://127.0.0.1:8000/api/feed/${userId}?page=${page}`);
+                    const response = await fetch(`http://telegram-feed-app-production.up.railway.app/api/feed/${userId}?page=${page}`);
                     if (!response.ok) throw new Error(`Ошибка: ${response.status}`);
                     
                     const newPosts = await response.json();
