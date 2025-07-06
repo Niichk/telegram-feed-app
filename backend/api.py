@@ -5,8 +5,13 @@ from typing import List
 
 from database import requests as db
 from database import schemas
+from database.engine import create_db
 
 app = FastAPI(title="Feed Reader API")
+
+@app.on_event("startup")
+async def on_startup():
+    await create_db()
 
 # "Монтируем" папку static, чтобы файлы из нее были доступны по URL
 # Например, файл /static/media/photo.jpg будет доступен по http://.../static/media/photo.jpg
@@ -22,7 +27,7 @@ origins = [
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins, # <-- ИСПОЛЬЗУЕМ СПИСОК
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
