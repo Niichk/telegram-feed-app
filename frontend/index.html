@@ -50,181 +50,189 @@
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useEffect, useCallback, useRef } = React;
+    const { useState, useEffect, useCallback, useRef } = React;
 
-        // --- Компоненты PostMedia и PostCard без изменений ---
-        // ... (твой код компонентов)
+    function PostCard({ post }) {
+        const formatDate = (dateString) => new Date(dateString).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+        const getPostUrl = (p) => p.channel.username ? `https://t.me/${p.channel.username}/${p.message_id}` : `https://t.me/c/${String(p.channel.id).substring(4)}/${p.message_id}`;
+        const postUrl = getPostUrl(post);
+        const isAudio = post.media_type === 'audio';
+        return (
+            <div className={`post-card ${post.media_url && !isAudio ? 'post-card-with-media' : ''}`}>
+                {!isAudio && <PostMedia post={post} />}
+                <div className="post-content">
+                    <div className="post-header"><div className="channel-title">{post.channel.title}</div><div className="post-date">{formatDate(post.date)}</div></div>
+                    {isAudio && <PostMedia post={post} />}
+                    {post.text && <div className="post-text">{post.text}</div>}
+                    <a href={postUrl} target="_blank" rel="noopener noreferrer" className="comment-button">Комментировать</a>
+                </div>
+            </div>
+        );
+    }
 
-        function App() {
-            const [posts, setPosts] = useState([]);
-            const [error, setError] = useState(null);
-            const [page, setPage] = useState(1);
-            const [hasMore, setHasMore] = useState(true);
-            const [isFetching, setIsFetching] = useState(false);
-            const [initialLoading, setInitialLoading] = useState(true);
-            const loader = useRef(null);
+    function PostMedia({ post }) {
+        if (!post.media_url) return null;
+        if (post.media_type === 'photo') return <img src={post.media_url} className="post-media-visual" alt="Изображение из поста" />;
+        if (post.media_type === 'video') return <video controls muted playsInline className="post-media-visual"><source src={post.media_url} /></video>;
+        if (post.media_type === 'audio') return <audio controls className="post-media-audio"><source src={post.media_url} /></audio>;
+        return null;
+    }
 
-            // --- НОВЫЕ СОСТОЯНИЯ ДЛЯ PULL-TO-REFRESH ---
-            const pullStartY = useRef(0);
-            const pullDeltaY = useRef(0);
-            const isPulling = useRef(false);
+    function App() {
+        const [posts, setPosts] = useState([]);
+        const [error, setError] = useState(null);
+        const page = useRef(1);
+        const [hasMore, setHasMore] = useState(true);
+        const [isFetching, setIsFetching] = useState(false); // Оставляем для рендера лоадера
+        const [initialLoading, setInitialLoading] = useState(true);
+        
+        const loader = useRef(null);
+        const pullStartY = useRef(0);
+        const pullDeltaY = useRef(0);
+        const isPulling = useRef(false);
+        
+        // ✅ ИСПРАВЛЕНИЕ 1: Добавляем isFetchingRef, чтобы разорвать цикл зависимостей
+        const isFetchingRef = useRef(false);
 
-            const fetchPosts = useCallback(async (isRefresh = false) => {
-                if (isFetching) return;
+        const fetchPosts = useCallback(async (isRefresh = false) => {
+            // Используем isFetchingRef для проверки, а не состояние
+            if (isFetchingRef.current) return;
+
+            // Устанавливаем оба флага
+            isFetchingRef.current = true;
+            setIsFetching(true);
+            
+            if (isRefresh) {
+                page.current = 1;
+            }
+
+            try {
+                const response = await fetch(
+                    `https://telegram-feed-app-production.up.railway.app/api/feed/?page=${page.current}`,
+                    { headers: { 'Authorization': `tma ${window.Telegram.WebApp.initData}` } }
+                );
                 
-                const currentPage = isRefresh ? 1 : page;
-                
-                setIsFetching(true);
-
-                // ОШИБОЧНЫЙ БЛОК IF УДАЛЕН ОТСЮДА
-
-                try {
-                    const response = await fetch(
-                        `https://telegram-feed-app-production.up.railway.app/api/feed/?page=${currentPage}`,
-                        { headers: { 'Authorization': `tma ${window.Telegram.WebApp.initData}` } }
-                    );
-                    
-                    if (!response.ok) {
-                        const errorData = await response.json().catch(() => null);
-                        throw new Error(errorData?.detail || `HTTP ошибка: ${response.status}`);
-                    }
-                    
-                    const newPosts = await response.json();
-                    
-                    setPosts(prevPosts => isRefresh ? newPosts : [...prevPosts, ...newPosts]);
-                    setHasMore(newPosts.length > 0);
-                    setPage(currentPage + 1);
-
-                } catch (err) {
-                    setError(err.message);
-                } finally {
-                    // Этот блок правильный, он сработает только ПОСЛЕ завершения запроса
-                    setIsFetching(false);
-                    setInitialLoading(false);
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => null);
+                    throw new Error(errorData?.detail || `HTTP ошибка: ${response.status}`);
                 }
-            }, [page, isFetching]);
-
-            // --- НОВАЯ ФУНКЦИЯ ДЛЯ ОБНОВЛЕНИЯ ---
-            const handleRefresh = useCallback(async () => {
-                const tg = window.Telegram.WebApp;
-                // Тактильный отклик для лучшего UX
-                tg.HapticFeedback.impactOccurred('light'); 
                 
-                // Сбрасываем ошибку перед обновлением
-                setError(null); 
+                const newPosts = await response.json();
                 
-                // Запускаем загрузку постов в режиме "обновление"
-                await fetchPosts(true);
-            }, [fetchPosts]);
+                setPosts(prevPosts => isRefresh ? newPosts : [...prevPosts, ...newPosts]);
+                setHasMore(newPosts.length > 0);
+                page.current += 1;
 
-            // --- НОВЫЙ ЭФФЕКТ ДЛЯ ОТСЛЕЖИВАНИЯ КАСАНИЙ ---
-            useEffect(() => {
-                const indicator = document.getElementById('refresh-indicator');
+            } catch (err) {
+                setError(err.message);
+            } finally {
+                // Сбрасываем оба флага
+                isFetchingRef.current = false;
+                setIsFetching(false);
+                setInitialLoading(false);
+            }
+        }, []); // ✅ ИСПРАВЛЕНИЕ 2: Пустой массив зависимостей. Функция создается только один раз.
 
-                const handleTouchStart = (e) => {
-                    // Начинаем отслеживать, только если мы в самом верху страницы
-                    if (window.scrollY === 0) {
-                        pullStartY.current = e.touches[0].clientY;
-                        isPulling.current = true;
-                    }
-                };
+        const handleRefresh = useCallback(() => {
+            const tg = window.Telegram.WebApp;
+            tg.HapticFeedback.impactOccurred('light'); 
+            setError(null); 
+            fetchPosts(true);
+        }, [fetchPosts]); // Зависимость от fetchPosts теперь безопасна
 
-                const handleTouchMove = (e) => {
-                    if (!isPulling.current) return;
-                    
-                    const delta = e.touches[0].clientY - pullStartY.current;
+        // --- Эффекты ---
+        useEffect(() => {
+            const indicator = document.getElementById('refresh-indicator');
+            if (!indicator) return;
+
+            const handleTouchStart = (e) => {
+                if (window.scrollY === 0) {
+                    pullStartY.current = e.touches[0].clientY;
+                    isPulling.current = true;
+                }
+            };
+            const handleTouchMove = (e) => {
+                if (!isPulling.current) return;
+                const delta = e.touches[0].clientY - pullStartY.current;
+                if (delta > 0) {
                     pullDeltaY.current = delta;
+                    indicator.style.top = `${Math.min(delta, 100) - 50}px`;
+                }
+            };
+            const handleTouchEnd = () => {
+                if (!isPulling.current) return;
+                if (pullDeltaY.current > 70) {
+                    indicator.style.top = '20px';
+                    // .finally() здесь не нужен, т.к. handleRefresh не является async
+                    handleRefresh(); 
+                    // Таймер, чтобы убрать индикатор после обновления
+                    setTimeout(() => { indicator.style.top = '-50px'; }, 1000);
+                } else {
+                    indicator.style.top = '-50px';
+                }
+                isPulling.current = false;
+                pullDeltaY.current = 0;
+            };
+            window.addEventListener('touchstart', handleTouchStart);
+            window.addEventListener('touchmove', handleTouchMove);
+            window.addEventListener('touchend', handleTouchEnd);
+            return () => {
+                window.removeEventListener('touchstart', handleTouchStart);
+                window.removeEventListener('touchmove', handleTouchMove);
+                window.removeEventListener('touchend', handleTouchEnd);
+            };
+        }, [handleRefresh]);
 
-                    // Если тянем вниз
-                    if (delta > 0) {
-                        // Показываем индикатор и двигаем его вниз
-                        indicator.style.top = `${Math.min(delta, 100) - 50}px`;
-                    }
-                };
-
-                const handleTouchEnd = () => {
-                    if (!isPulling.current) return;
-
-                    // Если потянули достаточно далеко, запускаем обновление
-                    if (pullDeltaY.current > 70) {
-                        indicator.style.top = '20px'; // Оставляем индикатор видимым
-                        handleRefresh().finally(() => {
-                            indicator.style.top = '-50px'; // Прячем после завершения
-                        });
-                    } else {
-                        // Если потянули недостаточно, просто прячем индикатор
-                        indicator.style.top = '-50px';
-                    }
-                    
-                    isPulling.current = false;
-                    pullDeltaY.current = 0;
-                };
-
-                window.addEventListener('touchstart', handleTouchStart);
-                window.addEventListener('touchmove', handleTouchMove);
-                window.addEventListener('touchend', handleTouchEnd);
-
-                return () => {
-                    window.removeEventListener('touchstart', handleTouchStart);
-                    window.removeEventListener('touchmove', handleTouchMove);
-                    window.removeEventListener('touchend', handleTouchEnd);
-                };
-            }, [handleRefresh]);
-
-            // Эффект для инициализации и первой загрузки (без изменений)
-            useEffect(() => {
-                const tg = window.Telegram.WebApp;
+        useEffect(() => {
+            const tg = window.Telegram.WebApp;
+            const init = () => {
                 const currentUserId = tg.initDataUnsafe?.user?.id;
-                
-                if (currentUserId) {
+                // Убрал ID для тестов, чтобы не смущать. Если нужно, можно вернуть.
+                if (currentUserId) { 
                     fetchPosts();
                 } else {
-                    setError("Не удалось определить пользователя Telegram.");
+                    setError("Не удалось определить пользователя Telegram. Откройте приложение через бота.");
                     setInitialLoading(false);
                 }
-                
-                tg.ready();
-                document.body.style.backgroundColor = tg.themeParams.bg_color || '#f0f2f5';
-                document.body.style.color = tg.themeParams.text_color || '#1c1e21';
-            }, []); // Запускается один раз
+            };
+            init();
+            tg.ready();
+            document.body.style.backgroundColor = tg.themeParams.bg_color || '#f0f2f5';
+            document.body.style.color = tg.themeParams.text_color || '#1c1e21';
+        }, [fetchPosts]); // ✅ ИСПРАВЛЕНИЕ 3: Эта зависимость теперь безопасна, т.к. fetchPosts стабильна
 
-            // Эффект для бесконечной прокрутки (без изменений)
-            useEffect(() => {
-                const handleObserver = (entities) => {
-                    const target = entities[0];
-                    if (target.isIntersecting && hasMore && !isFetching) {
-                        fetchPosts();
-                    }
-                };
-                
-                const observer = new IntersectionObserver(handleObserver, { threshold: 1 });
-                const currentLoader = loader.current;
-                if (currentLoader) observer.observe(currentLoader);
-                return () => {
-                    if (currentLoader) observer.unobserve(currentLoader);
-                };
-            }, [loader, fetchPosts, hasMore, isFetching]);
-            
-            // Логика отображения (без изменений)
-            if (initialLoading) return <div className="status-message"><div className="loader"></div></div>;
-            if (error) return <div className="status-message">Ошибка: {error}</div>;
-            if (posts.length === 0 && !hasMore) return <div className="status-message">Ваша лента пока пуста. Добавьте каналы через бота!</div>;
+        useEffect(() => {
+            // Эта зависимость тоже теперь безопасна
+            const handleObserver = (entities) => {
+                const target = entities[0];
+                if (target.isIntersecting && hasMore && !isFetching) {
+                    fetchPosts();
+                }
+            };
+            const observer = new IntersectionObserver(handleObserver, { rootMargin: '200px' });
+            const currentLoader = loader.current;
+            if (currentLoader) observer.observe(currentLoader);
+            return () => { if (currentLoader) observer.unobserve(currentLoader) };
+        }, [posts, hasMore, isFetching, fetchPosts]); 
 
-            return (
-                <div className="feed-container">
-                    {posts.map(post => <PostCard key={`${post.id}-${post.message_id}`} post={post} />)}
-                    {isFetching && !initialLoading && (
-                        <div className="loader-container">
-                            <div className="loader"></div>
-                        </div>
-                    )}
-                    <div ref={loader} />
-                </div>
-            );
-        }
+        // --- Рендер ---
+        if (initialLoading) return <div className="status-message"><div className="loader"></div></div>;
+        if (error) return <div className="status-message">Ошибка: {error}</div>;
+        if (posts.length === 0 && hasMore === false) return <div className="status-message">Ваша лента пока пуста. Добавьте каналы через бота!</div>;
 
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
-    </script>
+        return (
+            <div className="feed-container">
+                {posts.map(post => <PostCard key={`${post.channel_id}-${post.message_id}`} post={post} />)}
+                {isFetching && !initialLoading && (
+                    <div className="loader-container"><div className="loader"></div></div>
+                )}
+                <div ref={loader} />
+            </div>
+        );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+</script>
 </body>
 </html>
