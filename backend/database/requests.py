@@ -4,64 +4,67 @@ from sqlalchemy import select, and_
 from sqlalchemy.orm import selectinload
 
 # Функция для добавления пользователя и канала, а также оформления подписки
-async def add_subscription(user_id: int, user_fn: str, user_un: str, 
-                         channel_id: int, channel_title: str, channel_un: str):
-    async with session_maker() as session:
-        # --- Работаем с пользователем ---
-        # Проверяем, существует ли пользователь в базе
-        user = await session.get(User, user_id)
-        if not user:
-            # Если пользователя нет, создаем нового
-            new_user = User(id=user_id, first_name=user_fn, username=user_un)
-            session.add(new_user)
-            await session.commit() # Сохраняем, чтобы получить user.id для подписки
+from sqlalchemy import select, and_
+from sqlalchemy.orm import selectinload
+from sqlalchemy.ext.asyncio import AsyncSession
+from .models import User, Channel, Subscription, Post
 
-        # --- Работаем с каналом ---
-        # Проверяем, существует ли канал в базе
-        channel = await session.get(Channel, channel_id)
-        if not channel:
-            # Если канала нет, создаем новый
-            new_channel = Channel(id=channel_id, title=channel_title, username=channel_un)
-            session.add(new_channel)
-            await session.commit() # Сохраняем, чтобы получить channel.id для подписки
-
-        # --- Работаем с подпиской ---
-        # Проверяем, существует ли уже такая подписка
-        subscription_query = select(Subscription).where(
-            and_(
+async def add_subscription(
+            session: AsyncSession, 
+            user_id: int, user_fn: str, user_un: str, 
+            channel_id: int, channel_title: str, channel_un: str
+        ) -> str:
+            
+            # Проверяем, существует ли подписка. Это можно сделать в самом начале.
+            sub_query = select(Subscription).where(
                 Subscription.user_id == user_id,
                 Subscription.channel_id == channel_id
             )
-        )
-        existing_subscription = await session.execute(subscription_query)
-        if not existing_subscription.scalars().first():
-            # Если подписки нет, создаем ее
+            existing_subscription = (await session.execute(sub_query)).scalars().first()
+            
+            if existing_subscription:
+                # Если подписка уже есть, ничего не делаем и выходим.
+                # title можно взять из базы, если он там уже есть.
+                channel = await session.get(Channel, channel_id)
+                if channel:
+                    return f"Вы уже подписаны на канал «{channel.title}»."
+            else:
+                # Если канал не найден, возвращаем сообщение с title из аргументов
+                return f"Вы уже подписаны на канал «{channel_title}»."
+
+            # Если подписки нет, продолжаем.
+            # Используем session.get для эффективности.
+            user = await session.get(User, user_id)
+            if not user:
+                user = User(id=user_id, first_name=user_fn, username=user_un)
+                session.add(user) # Просто добавляем в сессию, без коммита
+
+            channel = await session.get(Channel, channel_id)
+            if not channel:
+                channel = Channel(id=channel_id, title=channel_title, username=channel_un)
+                session.add(channel) # Просто добавляем в сессию, без коммита
+
+            # Создаем новую подписку
             new_subscription = Subscription(user_id=user_id, channel_id=channel_id)
             session.add(new_subscription)
+
+            # ЕДИНСТВЕННЫЙ COMMIT В КОНЦЕ
+            # Сохраняет всё: пользователя, канал и подписку одним действием.
             await session.commit()
-            return f"Вы успешно подписались на канал «{channel_title}»!"
-        else:
-            return f"Вы уже подписаны на канал «{channel_title}»."
+
+            return f"✅ Вы успешно подписались на канал «{channel_title}»!"
         
-async def get_user_feed(user_id: int, limit: int = 20, offset: int = 0):
-    async with session_maker() as session:
-        # Находим все ID каналов, на которые подписан пользователь
-        subscriptions_query = select(Subscription.channel_id).where(Subscription.user_id == user_id)
-        subscriptions_result = await session.execute(subscriptions_query)
-        subscribed_channel_ids = subscriptions_result.scalars().all()
+async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 20, offset: int = 0) -> list[Post]:
+    # Один запрос вместо двух
+    feed_query = (
+        select(Post)
+        .join(Subscription, Post.channel_id == Subscription.channel_id) # <-- Соединяем Post и Subscription
+        .where(Subscription.user_id == user_id) # <-- Фильтруем по user_id
+        .options(selectinload(Post.channel)) # selectinload все еще полезен!
+        .order_by(Post.date.desc())
+        .offset(offset)
+        .limit(limit)
+    )
 
-        if not subscribed_channel_ids:
-            return []
-
-        # Выбираем посты из этих каналов
-        feed_query = (
-            select(Post)
-            .where(Post.channel_id.in_(subscribed_channel_ids))
-            .options(selectinload(Post.channel))
-            .order_by(Post.date.desc())
-            .offset(offset) # <-- ДОБАВЛЯЕМ СМЕЩЕНИЕ
-            .limit(limit)
-        )
-
-        feed_result = await session.execute(feed_query)
-        return feed_result.scalars().all()
+    feed_result = await session.execute(feed_query)
+    return list(feed_result.scalars().all())
