@@ -9,6 +9,7 @@ from database.engine import session_maker
 from database.models import Channel, Post
 from telethon.sessions import StringSession
 from io import BytesIO
+from datetime import datetime
 
 # Настройка
 load_dotenv()
@@ -27,15 +28,11 @@ AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 if not all([API_ID_STR, API_HASH, SESSION_STRING, S3_BUCKET_NAME, S3_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY]):
     raise ValueError("Одна или несколько переменных окружения не установлены!")
 
-API_ID = int(API_ID_STR) if API_ID_STR is not None else 0
+API_ID = int(API_ID_STR)
 POST_LIMIT = 10
 SLEEP_TIME = 300
 
 # --- Инициализация клиентов ---
-if SESSION_STRING is None:
-    raise ValueError("TELETHON_SESSION environment variable is not set!")
-if API_HASH is None:
-    raise ValueError("API_HASH environment variable is not set!")
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 s3_client = boto3.client(
     's3',
@@ -60,23 +57,14 @@ async def fetch_and_save_posts():
                 try:
                     target = channel.username if channel.username else channel.id
                     entity = await client.get_entity(target)
-                    # Ensure entity is not a list
-                    if isinstance(entity, list):
-                        if entity:
-                            entity = entity[0]
-                        else:
-                            logging.warning(f"Не удалось получить entity для канала «{channel.title}». Пропускаю.")
-                            continue
                 except (ValueError, TypeError):
                     logging.warning(f"Канал «{channel.title}» приватный или недоступен. Пропускаю.")
                     continue
 
                 async for message in client.iter_messages(entity, limit=POST_LIMIT):
-                    # Пропускаем служебные сообщения без контента
                     if not message or (not message.text and not message.media):
                         continue
                     
-                    # Проверяем, нет ли уже такого поста в базе
                     post_exists = await db_session.execute(
                         select(Post).where(Post.message_id == message.id)
                     )
@@ -92,7 +80,7 @@ async def fetch_and_save_posts():
                         elif message.photo: media_type = 'photo'
                         elif message.audio: media_type = 'audio'
 
-                        if media_type: # Если это поддерживаемый тип медиа
+                        if media_type:
                             try:
                                 file_in_memory = BytesIO()
                                 await client.download_media(message, file=file_in_memory)
@@ -103,7 +91,7 @@ async def fetch_and_save_posts():
 
                                 s3_client.upload_fileobj(
                                     file_in_memory, S3_BUCKET_NAME, file_name,
-                                    ExtraArgs={'ContentType': message.file.mime_type}
+                                    ExtraArgs={'ContentType': getattr(message.file, 'mime_type', 'application/octet-stream')}
                                 )
 
                                 media_url = f"https://{S3_BUCKET_NAME}.s3.{S3_REGION}.amazonaws.com/{file_name}"
@@ -114,8 +102,6 @@ async def fetch_and_save_posts():
                                 media_type = None
                                 media_url = None
                     
-                    # --- ИСПРАВЛЕНИЕ КРИТИЧЕСКОЙ ОШИБКИ ---
-                    # Создаем пост, даже если в нем только текст
                     new_post = Post(
                         channel_id=channel.id, message_id=message.id,
                         text=message.text, date=message.date,
