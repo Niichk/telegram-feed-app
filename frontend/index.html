@@ -70,14 +70,13 @@
             const isPulling = useRef(false);
 
             const fetchPosts = useCallback(async (isRefresh = false) => {
-                // Предохранитель от лишних запросов
                 if (isFetching) return;
                 
-                // Для обновления мы всегда загружаем первую страницу
                 const currentPage = isRefresh ? 1 : page;
                 
                 setIsFetching(true);
-                // ❌ ОШИБОЧНЫЙ БЛОК, КОТОРЫЙ НУЖНО УДАЛИТЬ, БЫЛ ЗДЕСЬ ❌
+
+                // ОШИБОЧНЫЙ БЛОК IF УДАЛЕН ОТСЮДА
 
                 try {
                     const response = await fetch(
