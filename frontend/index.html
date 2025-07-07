@@ -70,15 +70,14 @@
             const isPulling = useRef(false);
 
             const fetchPosts = useCallback(async (isRefresh = false) => {
+                // Предохранитель от лишних запросов
                 if (isFetching) return;
                 
                 // Для обновления мы всегда загружаем первую страницу
                 const currentPage = isRefresh ? 1 : page;
                 
                 setIsFetching(true);
-                if (!isRefresh) {
-                    setInitialLoading(false); // Убираем полноэкранный лоадер только при подгрузке
-                }
+                // ❌ ОШИБОЧНЫЙ БЛОК, КОТОРЫЙ НУЖНО УДАЛИТЬ, БЫЛ ЗДЕСЬ ❌
 
                 try {
                     const response = await fetch(
@@ -93,7 +92,6 @@
                     
                     const newPosts = await response.json();
                     
-                    // Если это обновление, заменяем посты, иначе - добавляем
                     setPosts(prevPosts => isRefresh ? newPosts : [...prevPosts, ...newPosts]);
                     setHasMore(newPosts.length > 0);
                     setPage(currentPage + 1);
@@ -101,6 +99,7 @@
                 } catch (err) {
                     setError(err.message);
                 } finally {
+                    // Этот блок правильный, он сработает только ПОСЛЕ завершения запроса
                     setIsFetching(false);
                     setInitialLoading(false);
                 }
