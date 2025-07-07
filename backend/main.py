@@ -6,8 +6,10 @@ from dotenv import load_dotenv
 
 from aiogram import Bot, Dispatcher
 
-from database.engine import create_db
+from database.engine import session_maker, create_db
 from handlers import user_commands, forwarded_messages
+from middlewares.db import DbSessionMiddleware 
+
 
 # --- Настройка в самом начале ---
 load_dotenv()
@@ -27,6 +29,7 @@ async def main():
     dp = Dispatcher()
     # -------------------------------------------------------------
 
+    dp.update.middleware(DbSessionMiddleware(session_pool=session_maker))
     # Подключаем роутеры к главному диспетчеру
     dp.include_router(user_commands.router)
     dp.include_router(forwarded_messages.router)
