@@ -2,14 +2,15 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>len.</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Моя Лента</title>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 12px; background-color: #f0f2f5; color: #1c1e21; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 0; background-color: #f0f2f5; color: #1c1e21; overflow-y: scroll; }
+        .app-container { padding: 12px; }
         .feed-container { max-width: 600px; margin: 0 auto; }
         .post-card { background-color: #ffffff; border-radius: 8px; margin-bottom: 12px; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1); border: 1px solid #ddd; overflow: hidden; }
         .post-content { padding: 16px; }
@@ -23,13 +24,26 @@
         .post-media-visual { width: 100%; max-height: 70vh; object-fit: cover; display: block; }
         .post-media-audio { width: 100%; margin-top: 12px; }
         .post-card-with-media .post-content { padding-top: 12px; }
-        .loader-container { display: flex; justify-content: center; padding: 20px; }
+        
+        /* --- СТИЛИ ДЛЯ PULL-TO-REFRESH --- */
+        .pull-to-refresh-container {
+            text-align: center;
+            height: 0;
+            transition: height 0.2s;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .pull-to-refresh-container.visible {
+            height: 60px; /* Высота, на которую опускается индикатор */
+        }
         .loader {
             border: 5px solid #f3f3f3;
             border-top: 5px solid #3498db;
             border-radius: 50%;
-            width: 40px;
-            height: 40px;
+            width: 30px;
+            height: 30px;
             animation: spin 1s linear infinite;
         }
         @keyframes spin {
@@ -76,55 +90,67 @@
             const [userId, setUserId] = useState(null);
             const [page, setPage] = useState(1);
             const [hasMore, setHasMore] = useState(true);
-            
-            // --- ИСПРАВЛЕНИЕ ЛОГИКИ ЗАГРУЗКИ ---
-            const [isFetching, setIsFetching] = useState(false); // Идет ли загрузка в данный момент
-            const [initialLoading, setInitialLoading] = useState(true); // Идет ли самая первая загрузка
+            const [isFetching, setIsFetching] = useState(false);
+            const [initialLoading, setInitialLoading] = useState(true);
             const loader = useRef(null);
 
-            const fetchPosts = useCallback(async () => {
-                // Предохранитель от повторных вызовов
-                if (!userId || !hasMore || isFetching) return;
+            // --- НОВЫЕ СОСТОЯНИЯ ДЛЯ PULL-TO-REFRESH ---
+            const [isRefreshing, setIsRefreshing] = useState(false);
+            const touchStart = useRef(0);
+            const touchEnd = useRef(0);
+            const PULL_DISTANCE = 70; // Дистанция, на которую нужно потянуть для обновления
+
+            const fetchPosts = useCallback(async (isRefresh = false) => {
+                if (!userId || isFetching) return;
                 
-                setIsFetching(true);
+                const currentPage = isRefresh ? 1 : page;
+                if (isRefresh) {
+                    setIsRefreshing(true);
+                } else {
+                    setIsFetching(true);
+                }
+
                 try {
-                    const response = await fetch(`https://telegram-feed-app-production.up.railway.app/api/feed/${userId}?page=${page}`);
+                    const response = await fetch(`https://telegram-feed-app-production-c1ed.up.railway.app/api/feed/${userId}?page=${currentPage}`);
                     if (!response.ok) throw new Error(`Ошибка: ${response.status}`);
                     
                     const newPosts = await response.json();
                     
-                    setPosts(prevPosts => [...prevPosts, ...newPosts]);
+                    if (isRefresh) {
+                        setPosts(newPosts);
+                    } else {
+                        setPosts(prevPosts => [...prevPosts, ...newPosts]);
+                    }
+                    
                     setHasMore(newPosts.length > 0);
-                    setPage(prevPage => prevPage + 1);
+                    setPage(currentPage + 1);
 
                 } catch (err) {
                     setError(err.message);
                 } finally {
                     setIsFetching(false);
-                    setInitialLoading(false); // Завершаем первоначальную загрузку
+                    setInitialLoading(false);
+                    setIsRefreshing(false);
                 }
-            }, [page, userId, hasMore, isFetching]);
+            }, [page, userId, isFetching]);
+            
+            // --- ОБРАБОТЧИКИ ЖЕСТА ---
+            const handleTouchStart = (e) => {
+                touchStart.current = e.targetTouches[0].clientY;
+            };
 
-            // Эффект для отслеживания прокрутки
-            useEffect(() => {
-                const handleObserver = (entities) => {
-                    const target = entities[0];
-                    if (target.isIntersecting && hasMore && !isFetching) {
-                        fetchPosts();
-                    }
-                };
-                
-                const observer = new IntersectionObserver(handleObserver, { threshold: 1 });
-                const currentLoader = loader.current;
-                if (currentLoader) {
-                    observer.observe(currentLoader);
+            const handleTouchMove = (e) => {
+                touchEnd.current = e.targetTouches[0].clientY;
+            };
+
+            const handleTouchEnd = () => {
+                if (window.scrollY === 0 && touchStart.current < touchEnd.current - PULL_DISTANCE) {
+                    // Пользователь потянул вниз в самом верху страницы
+                    fetchPosts(true); // Вызываем обновление
                 }
-                return () => {
-                    if (currentLoader) {
-                        observer.unobserve(currentLoader);
-                    }
-                };
-            }, [loader, fetchPosts, hasMore, isFetching]);
+                touchStart.current = 0;
+                touchEnd.current = 0;
+            };
 
             // Эффект для инициализации
             useEffect(() => {
@@ -138,30 +164,52 @@
                 document.body.style.color = tg.themeParams.text_color || '#1c1e21';
             }, []);
 
-            // Запускаем первую загрузку только после получения userId
+            // Запускаем первую загрузку
             useEffect(() => {
                 if (userId) {
                     fetchPosts();
                 }
             }, [userId]);
+            
+            // Эффект для бесконечной прокрутки
+            useEffect(() => {
+                const observer = new IntersectionObserver(
+                    entries => {
+                        if (entries[0].isIntersecting && hasMore && !isFetching && !initialLoading) {
+                            fetchPosts();
+                        }
+                    }, { threshold: 1 }
+                );
+                const currentLoader = loader.current;
+                if (currentLoader) observer.observe(currentLoader);
+                return () => { if (currentLoader) observer.unobserve(currentLoader); };
+            }, [loader, fetchPosts, hasMore, isFetching, initialLoading]);
 
-            // --- ОБНОВЛЕННАЯ ЛОГИКА ОТОБРАЖЕНИЯ ---
             if (initialLoading) return <div className="status-message"><div className="loader"></div></div>;
             if (error) return <div className="status-message">Ошибка: {error}</div>;
-            if (posts.length === 0 && !hasMore) return <div className="status-message">Ваша лента пока пуста. Добавьте каналы через бота!</div>;
-
+            
             return (
-                <div className="feed-container">
-                    {posts.map(post => <PostCard key={post.message_id} post={post} />)}
-                    
-                    {/* Индикатор загрузки в конце ленты */}
-                    {isFetching && hasMore && (
-                        <div className="loader-container">
-                            <div className="loader"></div>
-                        </div>
-                    )}
-                    {/* Невидимый элемент для отслеживания прокрутки */}
-                    <div ref={loader} />
+                <div 
+                    className="app-container"
+                    onTouchStart={handleTouchStart}
+                    onTouchMove={handleTouchMove}
+                    onTouchEnd={handleTouchEnd}
+                >
+                    <div className={`pull-to-refresh-container ${isRefreshing ? 'visible' : ''}`}>
+                        {isRefreshing && <div className="loader"></div>}
+                    </div>
+                    <div className="feed-container">
+                        {posts.length === 0 && !isFetching && (
+                             <div className="status-message">Ваша лента пока пуста. Добавьте каналы через бота!</div>
+                        )}
+                        {posts.map(post => <PostCard key={`${post.message_id}-${post.channel.id}`} post={post} />)}
+                        {isFetching && !isRefreshing && hasMore && (
+                            <div className="loader-container">
+                                <div className="loader"></div>
+                            </div>
+                        )}
+                        <div ref={loader} />
+                    </div>
                 </div>
             );
         }
