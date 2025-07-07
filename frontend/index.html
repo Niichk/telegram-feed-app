@@ -9,7 +9,35 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
-        /* ... твои старые стили ... */
+        .feed-container { max-width: 600px; margin: 0 auto; }
+        .post-card { background-color: #ffffff; border-radius: 8px; margin-bottom: 12px; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1); border: 1px solid #ddd; overflow: hidden; }
+        .post-content { padding: 16px; }
+        .post-header { display: flex; align-items: center; margin-bottom: 12px; }
+        .channel-title { font-weight: 600; font-size: 1.1em; }
+        .post-date { color: #65676b; font-size: 0.9em; margin-left: auto; }
+        .post-text { white-space: pre-wrap; line-height: 1.5; font-size: 1em; margin-bottom: 16px; }
+        .comment-button { display: inline-block; padding: 8px 16px; background-color: #e7f3ff; color: #1877f2; text-decoration: none; border-radius: 6px; font-weight: 500; transition: background-color 0.2s; }
+        .comment-button:hover { background-color: #dbeaff; }
+        .status-message { text-align: center; padding: 40px; font-size: 1.2em; color: #65676b; }
+        .post-media-visual {
+            width: 100%;
+            max-width: 100%;
+            height: auto;
+            max-height: 70vh;
+            object-fit: cover;
+            display: block;
+        }
+        .post-media-audio { width: 100%; margin-top: 12px; }
+        .post-card-with-media .post-content { padding-top: 12px; }
+        .loader-container { display: flex; justify-content: center; padding: 20px; }
+        .loader {
+            border: 5px solid #f3f3f3;
+            border-top: 5px solid #3498db;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
         body { 
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; 
             margin: 0; 
