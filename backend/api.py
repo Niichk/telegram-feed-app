@@ -2,6 +2,7 @@ import hmac
 import hashlib
 import os 
 import json
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, AsyncGenerator
@@ -12,6 +13,7 @@ from database import requests as db
 from database import schemas
 from database.engine import create_db, session_maker
 
+load_dotenv()
 # Загружаем токен из переменных окружения
 BOT_TOKEN = os.getenv("API_TOKEN")
 
