@@ -5,6 +5,8 @@
 .env
 /backend/.env
 
+telegram-feed-app/backend/static/media
+
 # Файлы сессии Telethon
 *.session
 *.session-journal
@@ -16,3 +18,4 @@ __pycache__/
 
 # Папки зависимостей Node.js (если появятся)
 node_modules/
+

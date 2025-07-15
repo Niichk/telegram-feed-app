@@ -9,16 +9,76 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
-        .feed-container { max-width: 600px; margin: 0 auto; }
-        .post-card { background-color: #ffffff; border-radius: 8px; margin-bottom: 12px; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1); border: 1px solid #ddd; overflow: hidden; }
-        .post-content { padding: 16px; }
-        .post-header { display: flex; align-items: center; margin-bottom: 12px; }
-        .channel-title { font-weight: 600; font-size: 1.1em; color: inherit;}
-        .post-date { color: #65676b; font-size: 0.9em; margin-left: auto; }
-        .post-text { white-space: pre-wrap; line-height: 1.5; font-size: 1em; margin-bottom: 16px; }
-        .comment-button { display: inline-block; padding: 8px 16px; background-color: #e7f3ff; color: #1877f2; text-decoration: none; border-radius: 6px; font-weight: 500; transition: background-color 0.2s; }
-        .comment-button:hover { background-color: #dbeaff; }
-        .status-message { text-align: center; padding: 40px; font-size: 1.2em; color: #65676b; }
+        /* --- Базовые стили --- */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 12px;
+            overscroll-behavior-y: contain; /* Предотвращает "отскок" страницы */
+
+            /* --- ИЗМЕНЕНО: Используем переменные темы Telegram --- */
+            background-color: var(--tg-theme-bg-color);
+            color: var(--tg-theme-text-color);
+        }
+
+        .feed-container {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        /* --- Стили карточки поста --- */
+        .post-card {
+            border-radius: 8px;
+            margin-bottom: 12px;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+
+            /* --- ИЗМЕНЕНО: Используем переменные темы --- */
+            background-color: var(--tg-theme-secondary-bg-color);
+            border: 1px solid var(--tg-theme-hint-color);
+        }
+        .post-content {
+            padding: 16px;
+        }
+        .post-card-with-media .post-content {
+            padding-top: 12px;
+        }
+
+        /* --- Хедер поста --- */
+        .post-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        .channel-title {
+            font-weight: 600;
+            font-size: 1.1em;
+            color: inherit; /* Наследует цвет от body */
+        }
+        .post-date {
+            font-size: 0.9em;
+            margin-left: auto;
+            /* --- ИЗМЕНЕНО: Используем переменную для подсказок --- */
+            color: var(--tg-theme-hint-color);
+        }
+
+        /* --- Текст и ссылки --- */
+        .post-text {
+            white-space: pre-wrap;
+            line-height: 1.5;
+            font-size: 1em;
+            margin-bottom: 16px;
+        }
+        .post-text a {
+            /* --- ИЗМЕНЕНО: Отдельный стиль для ссылок в тексте --- */
+            color: var(--tg-theme-link-color);
+            text-decoration: none;
+        }
+        .post-text a:hover {
+            text-decoration: underline;
+        }
+
+        /* --- Медиа --- */
         .post-media-visual {
             width: 100%;
             max-width: 100%;
@@ -27,38 +87,60 @@
             object-fit: cover;
             display: block;
         }
-        .post-media-audio { width: 100%; margin-top: 12px; }
-        .post-card-with-media .post-content { padding-top: 12px; }
-        .loader-container { display: flex; justify-content: center; padding: 20px; }
+        .post-media-audio {
+            width: 100%;
+            margin-top: 12px;
+        }
+
+        /* --- Кнопка --- */
+        .comment-button {
+            display: inline-block;
+            padding: 8px 16px;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 500;
+            transition: background-color 0.2s;
+            border: none;
+
+            /* --- ИЗМЕНЕНО: Используем переменные для кнопок --- */
+            background-color: var(--tg-theme-button-color);
+            color: var(--tg-theme-button-text-color);
+        }
+        
+        /* --- Статусы и лоадеры --- */
+        .status-message {
+            text-align: center;
+            padding: 40px;
+            font-size: 1.2em;
+            /* --- ИЗМЕНЕНО: Используем переменную для подсказок --- */
+            color: var(--tg-theme-hint-color);
+        }
+        .loader-container {
+            display: flex;
+            justify-content: center;
+            padding: 20px;
+        }
         .loader {
-            border: 5px solid #f3f3f3;
-            border-top: 5px solid #3498db;
             border-radius: 50%;
             width: 40px;
             height: 40px;
             animation: spin 1s linear infinite;
+
+            /* --- ИЗМЕНЕНО: Используем переменные темы --- */
+            border: 5px solid var(--tg-theme-secondary-bg-color);
+            border-top: 5px solid var(--tg-theme-button-color);
         }
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; 
-            margin: 0; 
-            padding: 12px; 
-            background-color: #f0f2f5; 
-            color: #1c1e21;
-            overscroll-behavior-y: contain; /* Предотвращает "отскок" страницы в Safari/Chrome на мобильных */
-        }
-        /* ... */
         @keyframes spin {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
 
-        /* --- НОВЫЕ СТИЛИ ДЛЯ PULL-TO-REFRESH --- */
+        /* --- Стили для Pull-to-Refresh --- */
         .pull-to-refresh-loader {
             position: absolute;
-            top: -50px; /* Изначально спрятан над экраном */
+            top: -50px;
             left: 50%;
             transform: translateX(-50%);
-            background-color: #fff;
             border-radius: 50%;
             display: flex;
             align-items: center;
@@ -67,7 +149,9 @@
             height: 40px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             z-index: 10;
-            transition: top 0.2s ease-out; /* Плавное появление */
+            transition: top 0.2s ease-out;
+            /* --- ИЗМЕНЕНО: Используем переменную темы --- */
+            background-color: var(--tg-theme-secondary-bg-color);
         }
     </style>
 </head>
@@ -83,15 +167,13 @@
     function LinkifiedText({ text }) {
         if (!text) return null;
 
-        // Регулярное выражение для поиска URL-адресов
         const urlRegex = /(https?:\/\/[^\s]+)/g;
         
-        // Создаем HTML-строку, заменяя URL на теги <a>
+        // --- ИЗМЕНЕНО: Убран инлайн-стиль, теперь он в CSS ---
         const linkifiedHtml = text.replace(urlRegex, (url) => 
-            `<a href="${url}" target="_blank" rel="noopener noreferrer" style="color: #1877f2;">${url}</a>`
+            `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`
         );
 
-        // Используем dangerouslySetInnerHTML для рендера нашего HTML
         return <div className="post-text" dangerouslySetInnerHTML={{ __html: linkifiedHtml }} />;
     }
 
@@ -126,22 +208,18 @@
         const [error, setError] = useState(null);
         const page = useRef(1);
         const [hasMore, setHasMore] = useState(true);
-        const [isFetching, setIsFetching] = useState(false); // Оставляем для рендера лоадера
+        const [isFetching, setIsFetching] = useState(false);
         const [initialLoading, setInitialLoading] = useState(true);
         
         const loader = useRef(null);
         const pullStartY = useRef(0);
         const pullDeltaY = useRef(0);
         const isPulling = useRef(false);
-        
-        // ✅ ИСПРАВЛЕНИЕ 1: Добавляем isFetchingRef, чтобы разорвать цикл зависимостей
         const isFetchingRef = useRef(false);
 
         const fetchPosts = useCallback(async (isRefresh = false) => {
-            // Используем isFetchingRef для проверки, а не состояние
             if (isFetchingRef.current) return;
 
-            // Устанавливаем оба флага
             isFetchingRef.current = true;
             setIsFetching(true);
             
@@ -169,21 +247,19 @@
             } catch (err) {
                 setError(err.message);
             } finally {
-                // Сбрасываем оба флага
                 isFetchingRef.current = false;
                 setIsFetching(false);
                 setInitialLoading(false);
             }
-        }, []); // ✅ ИСПРАВЛЕНИЕ 2: Пустой массив зависимостей. Функция создается только один раз.
+        }, []);
 
         const handleRefresh = useCallback(() => {
             const tg = window.Telegram.WebApp;
             tg.HapticFeedback.impactOccurred('light'); 
             setError(null); 
             fetchPosts(true);
-        }, [fetchPosts]); // Зависимость от fetchPosts теперь безопасна
+        }, [fetchPosts]);
 
-        // --- Эффекты ---
         useEffect(() => {
             const indicator = document.getElementById('refresh-indicator');
             if (!indicator) return;
@@ -206,9 +282,7 @@
                 if (!isPulling.current) return;
                 if (pullDeltaY.current > 70) {
                     indicator.style.top = '20px';
-                    // .finally() здесь не нужен, т.к. handleRefresh не является async
                     handleRefresh(); 
-                    // Таймер, чтобы убрать индикатор после обновления
                     setTimeout(() => { indicator.style.top = '-50px'; }, 1000);
                 } else {
                     indicator.style.top = '-50px';
@@ -230,7 +304,6 @@
             const tg = window.Telegram.WebApp;
             const init = () => {
                 const currentUserId = tg.initDataUnsafe?.user?.id;
-                // Убрал ID для тестов, чтобы не смущать. Если нужно, можно вернуть.
                 if (currentUserId) { 
                     fetchPosts();
                 } else {
@@ -240,12 +313,13 @@
             };
             init();
             tg.ready();
-            document.body.style.backgroundColor = tg.themeParams.bg_color || '#f0f2f5';
-            document.body.style.color = tg.themeParams.text_color || '#1c1e21';
-        }, [fetchPosts]); // ✅ ИСПРАВЛЕНИЕ 3: Эта зависимость теперь безопасна, т.к. fetchPosts стабильна
+            
+            // --- ИЗМЕНЕНО: Удалены строки, меняющие стиль body ---
+            // Теперь этим управляет CSS
+
+        }, [fetchPosts]);
 
         useEffect(() => {
-            // Эта зависимость тоже теперь безопасна
             const handleObserver = (entities) => {
                 const target = entities[0];
                 if (target.isIntersecting && hasMore && !isFetching) {
@@ -258,7 +332,6 @@
             return () => { if (currentLoader) observer.unobserve(currentLoader) };
         }, [posts, hasMore, isFetching, fetchPosts]); 
 
-        // --- Рендер ---
         if (initialLoading) return <div className="status-message"><div className="loader"></div></div>;
         if (error) return <div className="status-message">Ошибка: {error}</div>;
         if (posts.length === 0 && hasMore === false) return <div className="status-message">Ваша лента пока пуста. Добавьте каналы через бота!</div>;
