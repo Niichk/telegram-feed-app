@@ -13,7 +13,7 @@
         .post-card { background-color: #ffffff; border-radius: 8px; margin-bottom: 12px; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1); border: 1px solid #ddd; overflow: hidden; }
         .post-content { padding: 16px; }
         .post-header { display: flex; align-items: center; margin-bottom: 12px; }
-        .channel-title { font-weight: 600; font-size: 1.1em; }
+        .channel-title { font-weight: 600; font-size: 1.1em; color: inherit;}
         .post-date { color: #65676b; font-size: 0.9em; margin-left: auto; }
         .post-text { white-space: pre-wrap; line-height: 1.5; font-size: 1em; margin-bottom: 16px; }
         .comment-button { display: inline-block; padding: 8px 16px; background-color: #e7f3ff; color: #1877f2; text-decoration: none; border-radius: 6px; font-weight: 500; transition: background-color 0.2s; }
@@ -80,6 +80,21 @@
     <script type="text/babel">
     const { useState, useEffect, useCallback, useRef } = React;
 
+    function LinkifiedText({ text }) {
+        if (!text) return null;
+
+        // Регулярное выражение для поиска URL-адресов
+        const urlRegex = /(https?:\/\/[^\s]+)/g;
+        
+        // Создаем HTML-строку, заменяя URL на теги <a>
+        const linkifiedHtml = text.replace(urlRegex, (url) => 
+            `<a href="${url}" target="_blank" rel="noopener noreferrer" style="color: #1877f2;">${url}</a>`
+        );
+
+        // Используем dangerouslySetInnerHTML для рендера нашего HTML
+        return <div className="post-text" dangerouslySetInnerHTML={{ __html: linkifiedHtml }} />;
+    }
+
     function PostCard({ post }) {
         const formatDate = (dateString) => new Date(dateString).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
         const getPostUrl = (p) => p.channel.username ? `https://t.me/${p.channel.username}/${p.message_id}` : `https://t.me/c/${String(p.channel.id).substring(4)}/${p.message_id}`;
@@ -91,7 +106,7 @@
                 <div className="post-content">
                     <div className="post-header"><div className="channel-title">{post.channel.title}</div><div className="post-date">{formatDate(post.date)}</div></div>
                     {isAudio && <PostMedia post={post} />}
-                    {post.text && <div className="post-text">{post.text}</div>}
+                    {post.text && <LinkifiedText text={post.text} />}
                     <a href={postUrl} target="_blank" rel="noopener noreferrer" className="comment-button">Комментировать</a>
                 </div>
             </div>

@@ -8,6 +8,7 @@
 # Файлы сессии Telethon
 *.session
 *.session-journal
+generate_session.py
 
 # Системные папки Python
 __pycache__/
