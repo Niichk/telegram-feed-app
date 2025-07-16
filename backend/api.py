@@ -13,15 +13,28 @@ from database import requests as db
 from database import schemas
 from database.engine import create_db, session_maker
 
+from fastapi_cache import FastAPICache
+from fastapi_cache.backends.redis import RedisBackend
+from fastapi_cache.decorator import cache
+from redis import asyncio as aioredis
+
 load_dotenv()
 # Загружаем токен из переменных окружения
 BOT_TOKEN = os.getenv("API_TOKEN")
+REDIS_URL = os.getenv("REDIS_URL") 
 
 app = FastAPI(title="Feed Reader API")
 
 @app.on_event("startup")
+@app.on_event("startup")
 async def on_startup():
     await create_db()
+    # --- 3. ИНИЦИАЛИЗАЦИЯ КЭША ПРИ СТАРТЕ ---
+    if REDIS_URL:
+        # Убедимся, что URL корректен для aioredis
+        redis_client = aioredis.from_url(REDIS_URL, encoding="utf8", decode_responses=True)
+        FastAPICache.init(RedisBackend(redis_client), prefix="fastapi-cache")
+        print("FastAPI-Cache with Redis backend is initialized.")
 
 # Настройка CORS
 origins = [
@@ -59,11 +72,13 @@ def is_valid_tma_data(init_data: str) -> dict | None:
 
 # Единственный, правильный эндпоинт
 @app.get("/api/feed/", response_model=List[schemas.PostInFeed])
+@cache(expire=120) # Кэшировать ответ на 120 секунд (2 минуты)
 async def get_feed_for_user(
     page: int = 1,
     authorization: str | None = Header(None),
     session: AsyncSession = Depends(get_db_session)
 ):
+    # ВЕСЬ КОД ВНУТРИ ФУНКЦИИ ОСТАЕТСЯ БЕЗ ИЗМЕНЕНИЙ!
     if authorization is None or not authorization.startswith("tma "):
         raise HTTPException(status_code=401, detail="Not authorized")
     

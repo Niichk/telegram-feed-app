@@ -37,8 +37,6 @@ async def main():
     ]
     await bot.set_my_commands(main_menu_commands)
    
-    await drop_db()
-    logging.info("Bot: Old database tables dropped.")
     await create_db()
     logging.info("Bot: New database tables created.")
 

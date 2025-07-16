@@ -211,8 +211,6 @@ async def periodic_task():
 
 
 async def main():
-    await drop_db()
-    logging.info("Worker: Old database tables dropped.")
     await create_db()
     logging.info("Worker: New database tables created.")
 

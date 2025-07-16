@@ -19,3 +19,4 @@ __pycache__/
 # Папки зависимостей Node.js (если появятся)
 node_modules/
 
+docker-compose.yml
