@@ -28,7 +28,6 @@ REDIS_URL = os.getenv("REDIS_URL")
 app = FastAPI(title="Feed Reader API")
 
 @app.on_event("startup")
-@app.on_event("startup")
 async def on_startup():
     await create_db()
     # --- 3. ИНИЦИАЛИЗАЦИЯ КЭША ПРИ СТАРТЕ ---
@@ -77,9 +76,9 @@ def is_valid_tma_data(init_data: str) -> dict | None:
 @cache(expire=120)
 async def get_feed_for_user(
     background_tasks: BackgroundTasks,
+    session: AsyncSession = Depends(get_db_session),
     page: int = 1,
-    authorization: str | None = Header(None),
-    session: AsyncSession = Depends(get_db_session)
+    authorization: str | None = Header(None)
 ):
     # ВЕСЬ КОД ВНУТРИ ФУНКЦИИ ОСТАЕТСЯ БЕЗ ИЗМЕНЕНИЙ!
     if authorization is None or not authorization.startswith("tma "):
