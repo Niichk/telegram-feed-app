@@ -192,39 +192,43 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
 
 async def backfill_user_channels(user_id: int):
     """
-    Находит самые старые посты для каждого канала пользователя 
+    Находит самые старые посты для каждого канала пользователя
     и запускает для них дозагрузку еще более старых постов.
     """
     logging.info(f"Начинаю дозагрузку старых постов для пользователя {user_id}...")
-    async with session_maker() as db_session:
-        # Получаем все каналы, на которые подписан пользователь
-        from database.requests import get_user_subscriptions
-        subscriptions = await get_user_subscriptions(db_session, user_id)
 
-        if not subscriptions:
-            logging.info(f"У пользователя {user_id} нет подписок для дозагрузки.")
-            return
+    # Мы явно "включаем" и "выключаем" клиент Telethon на время выполнения задачи.
+    # Это гарантирует, что он будет онлайн, даже будучи запущенным из другого процесса.
+    async with client:
+        logging.info("Telethon-клиент подключен для выполнения фоновой задачи.")
+        async with session_maker() as db_session:
+            # Вся остальная логика остается без изменений
+            from database.requests import get_user_subscriptions
+            subscriptions = await get_user_subscriptions(db_session, user_id)
 
-        for channel in subscriptions:
-            # Для каждого канала ищем самый старый пост в нашей БД
-            oldest_post_query = (
-                select(Post)
-                .where(Post.channel_id == channel.id)
-                .order_by(Post.date.asc()) # Сортируем по возрастанию даты
-                .limit(1)
-            )
-            oldest_post_res = await db_session.execute(oldest_post_query)
-            oldest_post = oldest_post_res.scalars().first()
+            if not subscriptions:
+                logging.info(f"У пользователя {user_id} нет подписок для дозагрузки.")
+                return
 
-            if oldest_post:
-                logging.info(f"Самый старый пост для канала «{channel.title}» имеет ID {oldest_post.message_id}. Ищем посты старше...")
-                # Запускаем сбор постов, указывая, что нам нужны посты СТАРШЕ найденного
-                await fetch_posts_for_channel(
-                    channel=channel, 
-                    db_session=db_session, 
-                    post_limit=20, # Загружаем пачку из 20 старых постов
-                    offset_id=oldest_post.message_id
+            for channel in subscriptions:
+                oldest_post_query = (
+                    select(Post)
+                    .where(Post.channel_id == channel.id)
+                    .order_by(Post.date.asc())
+                    .limit(1)
                 )
+                oldest_post_res = await db_session.execute(oldest_post_query)
+                oldest_post = oldest_post_res.scalars().first()
+
+                if oldest_post:
+                    logging.info(f"Самый старый пост для канала «{channel.title}» имеет ID {oldest_post.message_id}. Ищем посты старше...")
+                    await fetch_posts_for_channel(
+                        channel=channel, 
+                        db_session=db_session, 
+                        post_limit=20,
+                        offset_id=oldest_post.message_id
+                    )
+    
     logging.info(f"Дозагрузка для пользователя {user_id} завершена.")
 
 
