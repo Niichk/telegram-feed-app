@@ -2,8 +2,9 @@ import hmac
 import hashlib
 import os 
 import json
+import logging
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Header, Depends
+from fastapi import FastAPI, HTTPException, Header, Depends, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, AsyncGenerator
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +13,7 @@ from urllib.parse import parse_qsl
 from database import requests as db
 from database import schemas
 from database.engine import create_db, session_maker
+from worker import backfill_user_channels
 
 from fastapi_cache import FastAPICache
 from fastapi_cache.backends.redis import RedisBackend
@@ -72,8 +74,9 @@ def is_valid_tma_data(init_data: str) -> dict | None:
 
 # Единственный, правильный эндпоинт
 @app.get("/api/feed/", response_model=List[schemas.PostInFeed])
-@cache(expire=120) # Кэшировать ответ на 120 секунд (2 минуты)
+@cache(expire=120)
 async def get_feed_for_user(
+    background_tasks: BackgroundTasks,
     page: int = 1,
     authorization: str | None = Header(None),
     session: AsyncSession = Depends(get_db_session)
@@ -97,4 +100,9 @@ async def get_feed_for_user(
     limit = 20
     offset = (page - 1) * limit
     feed = await db.get_user_feed(session=session, user_id=user_id, limit=limit, offset=offset)
+
+    if len(feed) < limit:
+        logging.info(f"Посты для пользователя {user_id} заканчиваются. Запускаю фоновую дозагрузку.")
+        background_tasks.add_task(backfill_user_channels, user_id)
+
     return feed

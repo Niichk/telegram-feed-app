@@ -114,7 +114,7 @@ async def upload_media_to_s3(message: types.Message, channel_id: int) -> dict | 
         return None
 
 
-async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, post_limit: int = POST_LIMIT):
+async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, post_limit: int = 10, offset_id: int = 0):
     # Запоминаем ID и название канала до начала всех операций
     channel_id_for_log = channel.id
     channel_title_for_log = channel.title
@@ -132,7 +132,7 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
             select(Post.message_id).where(Post.channel_id == channel_id_for_log).order_by(Post.date.desc()).limit(50)
         )).scalars().all())
 
-        async for message in client.iter_messages(entity, limit=post_limit):
+        async for message in client.iter_messages(entity, limit=post_limit, offset_id=offset_id):
             if not message or (not message.text and not message.media):
                 continue
             
@@ -188,6 +188,44 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
     except Exception as e:
         logging.error(f"Критическая ошибка при обработке канала «{channel_title_for_log}» (ID: {channel_id_for_log}): {e}")
         await db_session.rollback()
+
+
+async def backfill_user_channels(user_id: int):
+    """
+    Находит самые старые посты для каждого канала пользователя 
+    и запускает для них дозагрузку еще более старых постов.
+    """
+    logging.info(f"Начинаю дозагрузку старых постов для пользователя {user_id}...")
+    async with session_maker() as db_session:
+        # Получаем все каналы, на которые подписан пользователь
+        from database.requests import get_user_subscriptions
+        subscriptions = await get_user_subscriptions(db_session, user_id)
+
+        if not subscriptions:
+            logging.info(f"У пользователя {user_id} нет подписок для дозагрузки.")
+            return
+
+        for channel in subscriptions:
+            # Для каждого канала ищем самый старый пост в нашей БД
+            oldest_post_query = (
+                select(Post)
+                .where(Post.channel_id == channel.id)
+                .order_by(Post.date.asc()) # Сортируем по возрастанию даты
+                .limit(1)
+            )
+            oldest_post_res = await db_session.execute(oldest_post_query)
+            oldest_post = oldest_post_res.scalars().first()
+
+            if oldest_post:
+                logging.info(f"Самый старый пост для канала «{channel.title}» имеет ID {oldest_post.message_id}. Ищем посты старше...")
+                # Запускаем сбор постов, указывая, что нам нужны посты СТАРШЕ найденного
+                await fetch_posts_for_channel(
+                    channel=channel, 
+                    db_session=db_session, 
+                    post_limit=20, # Загружаем пачку из 20 старых постов
+                    offset_id=oldest_post.message_id
+                )
+    logging.info(f"Дозагрузка для пользователя {user_id} завершена.")
 
 
 async def periodic_task():
