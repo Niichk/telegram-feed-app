@@ -9,18 +9,22 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
-from database.engine import session_maker, drop_db, create_db
+# Убираем drop_db, оставляем только create_db
+from database.engine import session_maker, create_db
 from database.models import Channel, Post
 from telethon.sessions import StringSession
 from io import BytesIO
 from datetime import datetime
 from markdown_it import MarkdownIt
+from PIL import Image
 
 # Настройка
 load_dotenv()
 DB_URL_FOR_LOG = os.getenv("DATABASE_URL")
-logging.info(f"!!! WORKER STARTING WITH DATABASE_URL: {DB_URL_FOR_LOG} !!!")
+# Исправляем настройку логгера
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.info(f"!!! WORKER STARTING WITH DATABASE_URL: {DB_URL_FOR_LOG} !!!")
+
 
 # --- Переменные окружения ---
 S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME")
@@ -37,7 +41,7 @@ if not all([API_ID_STR, API_HASH, SESSION_STRING, S3_BUCKET_NAME, S3_REGION, AWS
 if API_ID_STR is None:
     raise ValueError("API_ID environment variable is not set!")
 API_ID = int(API_ID_STR)
-POST_LIMIT = 10  # Лимит для первоначальной загрузки и периодических проверок
+POST_LIMIT = 10
 SLEEP_TIME = 300
 
 # --- Инициализация клиентов ---
@@ -54,21 +58,18 @@ s3_client = boto3.client(
 )
 md = MarkdownIt()
 
-# --- ИЗМЕНЕНО: Новая, переиспользуемая функция для сбора постов ---
+
 async def upload_media_to_s3(message: types.Message, channel_id: int) -> dict | None:
     """Загружает медиафайл в S3 и возвращает словарь с его данными."""
     media_type = None
     if isinstance(message.media, types.MessageMediaPhoto):
         media_type = 'photo'
     elif isinstance(message.media, types.MessageMediaDocument):
-        # Try to distinguish between video and audio by mime_type
         mime_type = getattr(message.media.document, 'mime_type', '') if hasattr(message.media, 'document') else ''
         if mime_type.startswith('video/'):
             media_type = 'video'
         elif mime_type.startswith('audio/'):
             media_type = 'audio'
-        else:
-            media_type = None
 
     if not media_type:
         return None
@@ -77,34 +78,31 @@ async def upload_media_to_s3(message: types.Message, channel_id: int) -> dict | 
         file_in_memory = io.BytesIO()
         await client.download_media(message, file=file_in_memory)
         file_in_memory.seek(0)
-
-        if (
-            isinstance(message.media, types.MessageMediaDocument)
-            and hasattr(message.media, 'document')
-            and message.media.document
-            and not isinstance(message.media.document, types.DocumentEmpty)
-        ):
-            attributes = getattr(message.media.document, 'attributes', [])
-            file_name = None
-            if attributes and hasattr(attributes[0], 'file_name'):
-                file_name = attributes[0].file_name
-            file_extension = os.path.splitext(file_name)[1] if file_name else '.dat'
-            content_type = getattr(message.media.document, 'mime_type', 'application/octet-stream')
-        elif isinstance(message.media, types.MessageMediaPhoto) and hasattr(message.media, 'photo') and message.media.photo:
+        
+        # --- ИСПРАВЛЕННАЯ ЛОГИКА ---
+        if media_type == 'photo':
+            with Image.open(file_in_memory) as im:
+                im = im.convert("RGB")
+                output_buffer = io.BytesIO()
+                im.save(output_buffer, format="JPEG", quality=85, optimize=True)
+                output_buffer.seek(0)
+                file_in_memory = output_buffer
+            
             file_extension = '.jpg'
             content_type = 'image/jpeg'
-        else:
-            file_extension = '.dat'
-            content_type = 'application/octet-stream'
+            logging.info("Изображение успешно сжато.")
+        else: # Используем else, чтобы этот блок не выполнялся для фото
+            if (isinstance(message.media, types.MessageMediaDocument) and hasattr(message.media, 'document') and message.media.document and not isinstance(message.media.document, types.DocumentEmpty)):
+                attributes = getattr(message.media.document, 'attributes', [])
+                file_name = next((attr.file_name for attr in attributes if hasattr(attr, 'file_name')), None)
+                file_extension = os.path.splitext(file_name)[1] if file_name else '.dat'
+                content_type = getattr(message.media.document, 'mime_type', 'application/octet-stream')
+            else:
+                file_extension = '.dat'
+                content_type = 'application/octet-stream'
 
         file_key = f"media/{channel_id}/{message.id}{file_extension}"
-
-        s3_client.upload_fileobj(
-            file_in_memory,
-            S3_BUCKET_NAME,
-            file_key,
-            ExtraArgs={'ContentType': content_type}
-        )
+        s3_client.upload_fileobj(file_in_memory, S3_BUCKET_NAME, file_key, ExtraArgs={'ContentType': content_type})
         
         media_url = f"https://{S3_BUCKET_NAME}.s3.{S3_REGION}.amazonaws.com/{file_key}"
         logging.info(f"Загружен файл в S3: {file_key}")
