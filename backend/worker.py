@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
-from database.engine import session_maker
+from database.engine import session_maker, create_db
 from database.models import Channel, Post
 from telethon.sessions import StringSession
 from io import BytesIO
@@ -18,6 +18,8 @@ from markdown_it import MarkdownIt
 
 # Настройка
 load_dotenv()
+DB_URL_FOR_LOG = os.getenv("DATABASE_URL")
+logging.info(f"!!! WORKER STARTING WITH DATABASE_URL: {DB_URL_FOR_LOG} !!!")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- Переменные окружения ---

@@ -14,6 +14,8 @@ from middlewares.db import DbSessionMiddleware
 
 # --- Настройка в самом начале ---
 load_dotenv()
+DB_URL_FOR_LOG = os.getenv("DATABASE_URL")
+logging.info(f"!!! BOT STARTING WITH DATABASE_URL: {DB_URL_FOR_LOG} !!!")
 logging.basicConfig(level=logging.INFO)
 
 API_TOKEN = os.getenv("API_TOKEN")
