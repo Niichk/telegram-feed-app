@@ -118,14 +118,12 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
     logging.info(f"Начинаю сбор постов для канала «{channel.title}»...")
     try:
         entity = await client.get_entity(channel.username or channel.id)
-        # Ensure entity is not a list
         if isinstance(entity, list):
             if len(entity) == 0:
                 logging.warning(f"Не удалось получить entity для канала {channel.username or channel.id}")
                 return
             entity = entity[0]
 
-        # Оптимизация: получаем ID последних постов
         existing_post_ids = set((await db_session.execute(
             select(Post.message_id).where(Post.channel_id == channel.id).order_by(Post.date.desc()).limit(50)
         )).scalars().all())
@@ -134,63 +132,63 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
             if not message or (not message.text and not message.media):
                 continue
             
-            # Если это одиночный пост, который мы уже видели, пропускаем
             if not message.grouped_id and message.id in existing_post_ids:
-                logging.info(f"Достигнут уже сохраненный пост {message.id} в «{channel.title}».")
+                logging.info(f"Достигнут уже сохраненный пост {message.id} в «{channel.title}». Завершаю сбор.")
                 break
             
-            # --- НОВАЯ ЛОГИКА ОБРАБОТКИ ---
             media_item = await upload_media_to_s3(message, channel.id)
             html_text = md.render(message.text) if message.text else None
 
-            # --- Обработка сгруппированных постов (альбомов) ---
+            # --- Обработка альбомов (без изменений) ---
             if message.grouped_id:
-                # Пытаемся найти существующий пост для этого альбома
                 existing_post_query = await db_session.execute(
                     select(Post).where(Post.grouped_id == message.grouped_id)
                 )
                 existing_album_post = existing_post_query.scalars().first()
                 
                 if existing_album_post:
-                    # Если пост для альбома уже есть, просто добавляем медиа
                     if media_item and media_item not in existing_album_post.media:
                         existing_album_post.media.append(media_item)
                         logging.info(f"Добавлен медиа к альбому {message.grouped_id}.")
                 else:
-                    # Если поста нет, создаем новый для всего альбома
                     try:
                         new_post = Post(
-                            channel_id=channel.id,
-                            message_id=message.id, # ID первого сообщения станет ID поста
-                            date=message.date,
-                            text=html_text,
-                            grouped_id=message.grouped_id,
+                            channel_id=channel.id, message_id=message.id, date=message.date,
+                            text=html_text, grouped_id=message.grouped_id,
                             media=[media_item] if media_item else []
                         )
                         db_session.add(new_post)
-                        await db_session.commit() # Сохраняем сразу, чтобы другие сообщения его нашли
+                        await db_session.commit()
                         logging.info(f"Создан новый пост для альбома {message.grouped_id}.")
-                    except IntegrityError: # Если другой процесс создал его пока мы работали
+                    except IntegrityError:
                         await db_session.rollback()
-                        logging.warning(f"Конфликт при создании поста для альбома {message.grouped_id}. Повторная попытка.")
-                        # Можно добавить логику повторной попытки обновления
+                        logging.warning(f"Конфликт при создании поста для альбома {message.grouped_id}.")
             
-            # --- Обработка одиночных постов ---
+            # --- ИСПРАВЛЕННАЯ ОБРАБОТКА ОДИНОЧНЫХ ПОСТОВ ---
             else:
-                new_post = Post(
-                    channel_id=channel.id,
-                    message_id=message.id,
-                    date=message.date,
-                    text=html_text,
-                    media=[media_item] if media_item else []
-                )
-                db_session.add(new_post)
-                logging.info(f"Сохранен одиночный пост {message.id} из «{channel.title}»")
+                try:
+                    new_post = Post(
+                        channel_id=channel.id, message_id=message.id, date=message.date,
+                        text=html_text, media=[media_item] if media_item else []
+                    )
+                    db_session.add(new_post)
+                    # Сохраняем пост в базу СРАЗУ ЖЕ
+                    await db_session.commit()
+                    logging.info(f"Сохранен одиночный пост {message.id} из «{channel.title}»")
+                except IntegrityError:
+                    # Если такой пост уже есть, откатываем транзакцию и идем дальше
+                    await db_session.rollback()
+                    logging.warning(f"Пост {message.id} уже существует, пропуск.")
+                except Exception as e:
+                    # Если любая другая ошибка, откатываем и логируем
+                    await db_session.rollback()
+                    logging.error(f"Не удалось сохранить пост {message.id}: {e}")
 
+        # Финальный коммит нужен для сохранения изменений в альбомах (когда медиа только добавляется)
         await db_session.commit()
 
     except Exception as e:
-        logging.error(f"Неизвестная ошибка при обработке канала «{channel.title}»: {e}")
+        logging.error(f"Критическая ошибка при обработке канала «{channel.title}»: {e}")
         await db_session.rollback()
 
 
