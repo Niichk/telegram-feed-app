@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
-from database.engine import session_maker, create_db
+from database.engine import session_maker, drop_db, create_db
 from database.models import Channel, Post
 from telethon.sessions import StringSession
 from io import BytesIO
@@ -211,6 +211,11 @@ async def periodic_task():
 
 
 async def main():
+    await drop_db()
+    logging.info("Worker: Old database tables dropped.")
+    await create_db()
+    logging.info("Worker: New database tables created.")
+
     async with client:
         logging.info("Клиент Telethon запущен.")
         while True:

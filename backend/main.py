@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher
 from aiogram.types import BotCommand
 
-from database.engine import session_maker, create_db
+from database.engine import session_maker, drop_db, create_db 
 from handlers import user_commands, forwarded_messages, callback_handlers
 from middlewares.db import DbSessionMiddleware 
 
@@ -36,14 +36,16 @@ async def main():
         BotCommand(command="/subscriptions", description="📜 Мои подписки")
     ]
     await bot.set_my_commands(main_menu_commands)
-    # ---------------------------
+   
+    await drop_db()
+    logging.info("Bot: Old database tables dropped.")
+    await create_db()
+    logging.info("Bot: New database tables created.")
 
     dp.update.middleware(DbSessionMiddleware(session_pool=session_maker))
     dp.include_router(user_commands.router)
     dp.include_router(forwarded_messages.router)
     dp.include_router(callback_handlers.router) 
-
-    await create_db()
     
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
