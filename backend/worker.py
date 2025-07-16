@@ -115,17 +115,21 @@ async def upload_media_to_s3(message: types.Message, channel_id: int) -> dict | 
 
 
 async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, post_limit: int = POST_LIMIT):
-    logging.info(f"Начинаю сбор постов для канала «{channel.title}»...")
+    # Запоминаем ID и название канала до начала всех операций
+    channel_id_for_log = channel.id
+    channel_title_for_log = channel.title
+
     try:
-        entity = await client.get_entity(channel.username or channel.id)
+        logging.info(f"Начинаю сбор постов для канала «{channel_title_for_log}»...")
+        entity = await client.get_entity(channel.username or channel_id_for_log)
         if isinstance(entity, list):
             if len(entity) == 0:
-                logging.warning(f"Не удалось получить entity для канала {channel.username or channel.id}")
+                logging.warning(f"Не удалось получить entity для канала {channel_id_for_log}")
                 return
             entity = entity[0]
 
         existing_post_ids = set((await db_session.execute(
-            select(Post.message_id).where(Post.channel_id == channel.id).order_by(Post.date.desc()).limit(50)
+            select(Post.message_id).where(Post.channel_id == channel_id_for_log).order_by(Post.date.desc()).limit(50)
         )).scalars().all())
 
         async for message in client.iter_messages(entity, limit=post_limit):
@@ -133,13 +137,12 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                 continue
             
             if not message.grouped_id and message.id in existing_post_ids:
-                logging.info(f"Достигнут уже сохраненный пост {message.id} в «{channel.title}». Завершаю сбор.")
+                logging.info(f"Достигнут уже сохраненный пост {message.id} в «{channel_title_for_log}». Завершаю сбор.")
                 break
             
-            media_item = await upload_media_to_s3(message, channel.id)
+            media_item = await upload_media_to_s3(message, channel_id_for_log)
             html_text = md.render(message.text) if message.text else None
 
-            # --- Обработка альбомов (без изменений) ---
             if message.grouped_id:
                 existing_post_query = await db_session.execute(
                     select(Post).where(Post.grouped_id == message.grouped_id)
@@ -153,7 +156,7 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                 else:
                     try:
                         new_post = Post(
-                            channel_id=channel.id, message_id=message.id, date=message.date,
+                            channel_id=channel_id_for_log, message_id=message.id, date=message.date,
                             text=html_text, grouped_id=message.grouped_id,
                             media=[media_item] if media_item else []
                         )
@@ -164,31 +167,26 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                         await db_session.rollback()
                         logging.warning(f"Конфликт при создании поста для альбома {message.grouped_id}.")
             
-            # --- ИСПРАВЛЕННАЯ ОБРАБОТКА ОДИНОЧНЫХ ПОСТОВ ---
             else:
                 try:
                     new_post = Post(
-                        channel_id=channel.id, message_id=message.id, date=message.date,
+                        channel_id=channel_id_for_log, message_id=message.id, date=message.date,
                         text=html_text, media=[media_item] if media_item else []
                     )
                     db_session.add(new_post)
-                    # Сохраняем пост в базу СРАЗУ ЖЕ
                     await db_session.commit()
-                    logging.info(f"Сохранен одиночный пост {message.id} из «{channel.title}»")
+                    logging.info(f"Сохранен одиночный пост {message.id} из «{channel_title_for_log}»")
                 except IntegrityError:
-                    # Если такой пост уже есть, откатываем транзакцию и идем дальше
                     await db_session.rollback()
                     logging.warning(f"Пост {message.id} уже существует, пропуск.")
                 except Exception as e:
-                    # Если любая другая ошибка, откатываем и логируем
                     await db_session.rollback()
                     logging.error(f"Не удалось сохранить пост {message.id}: {e}")
 
-        # Финальный коммит нужен для сохранения изменений в альбомах (когда медиа только добавляется)
         await db_session.commit()
 
     except Exception as e:
-        logging.error(f"Критическая ошибка при обработке канала «{channel.title}»: {e}")
+        logging.error(f"Критическая ошибка при обработке канала «{channel_title_for_log}» (ID: {channel_id_for_log}): {e}")
         await db_session.rollback()
 
 
