@@ -167,14 +167,7 @@
     function LinkifiedText({ text }) {
         if (!text) return null;
 
-        const urlRegex = /(https?:\/\/[^\s]+)/g;
-        
-        // --- ИЗМЕНЕНО: Убран инлайн-стиль, теперь он в CSS ---
-        const linkifiedHtml = text.replace(urlRegex, (url) => 
-            `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`
-        );
-
-        return <div className="post-text" dangerouslySetInnerHTML={{ __html: linkifiedHtml }} />;
+        return <div className="post-text" dangerouslySetInnerHTML={{ __html: text }} />;
     }
 
     function PostCard({ post }) {

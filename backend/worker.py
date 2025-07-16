@@ -13,6 +13,7 @@ from database.models import Channel, Post
 from telethon.sessions import StringSession
 from io import BytesIO
 from datetime import datetime
+from markdown_it import MarkdownIt
 
 # Настройка
 load_dotenv()
@@ -42,6 +43,7 @@ s3_client = boto3.client(
     aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
     region_name=S3_REGION
 )
+md = MarkdownIt()
 
 # --- ИЗМЕНЕНО: Новая, переиспользуемая функция для сбора постов ---
 async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, post_limit: int = POST_LIMIT):
@@ -102,9 +104,12 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                         logging.error(f"Ошибка загрузки медиа из поста {message.id} в «{channel.title}»: {e}")
                         media_type, media_url = None, None
             
+            html_text = md.render(message.text) if message.text else None
+
             new_post = Post(
                 channel_id=channel.id, message_id=message.id,
-                text=message.text, date=message.date,
+                text=html_text, 
+                date=message.date,
                 media_type=media_type, media_url=media_url
             )
             db_session.add(new_post)

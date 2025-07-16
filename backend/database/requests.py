@@ -61,3 +61,17 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 20, of
     )
     feed_result = await session.execute(feed_query)
     return list(feed_result.scalars().all())
+
+async def get_user_subscriptions(session: AsyncSession, user_id: int) -> list[Channel]:
+    """
+    Возвращает список объектов Channel, на которые подписан пользователь.
+    """
+    subs_query = (
+        select(Channel)
+        .join(Subscription, Channel.id == Subscription.channel_id)
+        .where(Subscription.user_id == user_id)
+        .order_by(Channel.title) # Сортируем по алфавиту для удобства
+    )
+    
+    result = await session.execute(subs_query)
+    return list(result.scalars().all())
