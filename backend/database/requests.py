@@ -75,3 +75,21 @@ async def get_user_subscriptions(session: AsyncSession, user_id: int) -> list[Ch
     
     result = await session.execute(subs_query)
     return list(result.scalars().all())
+
+async def delete_subscription(session: AsyncSession, user_id: int, channel_id: int) -> bool:
+    """
+    Удаляет подписку пользователя на канал.
+    Возвращает True, если удаление прошло успешно, и False, если подписка не была найдена.
+    """
+    sub_query = select(Subscription).where(
+        Subscription.user_id == user_id,
+        Subscription.channel_id == channel_id
+    )
+    existing_subscription = (await session.execute(sub_query)).scalars().first()
+
+    if existing_subscription:
+        await session.delete(existing_subscription)
+        await session.commit()
+        return True
+    
+    return False

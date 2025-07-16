@@ -5,11 +5,10 @@ import sys
 from dotenv import load_dotenv
 
 from aiogram import Bot, Dispatcher
-# 1. ДОБАВЬ ЭТОТ ИМПОРТ
 from aiogram.types import BotCommand
 
 from database.engine import session_maker, create_db
-from handlers import user_commands, forwarded_messages
+from handlers import user_commands, forwarded_messages, callback_handlers
 from middlewares.db import DbSessionMiddleware 
 
 
@@ -40,6 +39,7 @@ async def main():
     dp.update.middleware(DbSessionMiddleware(session_pool=session_maker))
     dp.include_router(user_commands.router)
     dp.include_router(forwarded_messages.router)
+    dp.include_router(callback_handlers.router) 
 
     await create_db()
     
