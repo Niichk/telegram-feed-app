@@ -174,13 +174,19 @@
         const formatDate = (dateString) => new Date(dateString).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
         const getPostUrl = (p) => p.channel.username ? `https://t.me/${p.channel.username}/${p.message_id}` : `https://t.me/c/${String(p.channel.id).substring(4)}/${p.message_id}`;
         const postUrl = getPostUrl(post);
-        const isAudio = post.media_type === 'audio';
+        
+        // Проверяем, есть ли аудио, чтобы не оборачивать карточку
+        const hasVisualMedia = post.media && post.media.some(item => item.type === 'photo' || item.type === 'video');
+
         return (
-            <div className={`post-card ${post.media_url && !isAudio ? 'post-card-with-media' : ''}`}>
-                {!isAudio && <PostMedia post={post} />}
+            <div className={`post-card ${hasVisualMedia ? 'post-card-with-media' : ''}`}>
+                {/* Передаем в PostMedia весь массив post.media */}
+                <PostMedia media={post.media} />
                 <div className="post-content">
-                    <div className="post-header"><div className="channel-title">{post.channel.title}</div><div className="post-date">{formatDate(post.date)}</div></div>
-                    {isAudio && <PostMedia post={post} />}
+                    <div className="post-header">
+                        <div className="channel-title">{post.channel.title}</div>
+                        <div className="post-date">{formatDate(post.date)}</div>
+                    </div>
                     {post.text && <LinkifiedText text={post.text} />}
                     <a href={postUrl} target="_blank" rel="noopener noreferrer" className="comment-button">Комментировать</a>
                 </div>
@@ -188,12 +194,27 @@
         );
     }
 
-    function PostMedia({ post }) {
-        if (!post.media_url) return null;
-        if (post.media_type === 'photo') return <img src={post.media_url} className="post-media-visual" alt="Изображение из поста" />;
-        if (post.media_type === 'video') return <video controls muted playsInline className="post-media-visual"><source src={post.media_url} /></video>;
-        if (post.media_type === 'audio') return <audio controls className="post-media-audio"><source src={post.media_url} /></audio>;
-        return null;
+    function PostMedia({ media }) {
+        // Если медиа нет или это пустой массив, ничего не рендерим
+        if (!media || media.length === 0) return null;
+
+        // Просто проходимся по массиву и рендерим каждый элемент
+        return (
+            <div className="post-media-gallery">
+                {media.map((item, index) => {
+                    if (item.type === 'photo') {
+                        return <img key={index} src={item.url} className="post-media-visual" alt={`Изображение ${index + 1}`} />;
+                    }
+                    if (item.type === 'video') {
+                        return <video key={index} controls muted playsInline className="post-media-visual"><source src={item.url} /></video>;
+                    }
+                    if (item.type === 'audio') {
+                        return <audio key={index} controls className="post-media-audio"><source src={item.url} /></audio>;
+                    }
+                    return null;
+                })}
+            </div>
+        );
     }
 
     function App() {

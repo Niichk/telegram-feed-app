@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, String, ForeignKey
+from sqlalchemy import BigInteger, String, ForeignKey, JSON
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.ext.asyncio import AsyncAttrs
 from datetime import datetime
@@ -46,14 +46,20 @@ class Post(Base):
     __tablename__ = 'posts'
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    # ID канала, к которому относится пост
     channel_id: Mapped[int] = mapped_column(ForeignKey('channels.id'))
-    # ID самого сообщения в Telegram
-    message_id: Mapped[int] = mapped_column(unique=True)
-    # Текст поста
+    # message_id теперь будет ID первого сообщения в альбоме или единственного
+    message_id: Mapped[int] = mapped_column() 
     text: Mapped[str] = mapped_column(Text, nullable=True)
-    # Дата публикации
     date: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    media_type: Mapped[str] = mapped_column(String(20), nullable=True) 
-    media_url: Mapped[str] = mapped_column(String, nullable=True)     
+
+    # --- ИЗМЕНЕНИЯ ДЛЯ ГРУППИРОВКИ ---
+    # Уникальный ID альбома от Telegram
+    grouped_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=True, index=True)
+    # Поле для хранения списка медиа: [{'type': 'photo', 'url': '...'}, ...]
+    media: Mapped[list[dict]] = mapped_column(JSON, nullable=True)
+    
+    # --- СТАРЫЕ ПОЛЯ УДАЛЕНЫ ---
+    # media_type: Mapped[str]
+    # media_url: Mapped[str]
+    
     channel: Mapped["Channel"] = relationship(back_populates="posts")

@@ -14,8 +14,10 @@ async def process_unsubscription(callback: types.CallbackQuery, session: AsyncSe
 
     # Извлекаем ID канала из callback_data
     try:
+        if not callback.data:
+            raise ValueError("callback.data is None")
         channel_id = int(callback.data.split(":")[1])
-    except (IndexError, ValueError):
+    except (IndexError, ValueError, AttributeError):
         await callback.answer("Ошибка в данных. Попробуйте снова.", show_alert=True)
         return
 
@@ -24,9 +26,11 @@ async def process_unsubscription(callback: types.CallbackQuery, session: AsyncSe
 
     if success:
         # Если удачно, редактируем исходное сообщение, чтобы убрать кнопки
-        await callback.message.edit_text("✅ Вы успешно отписались.")
+        if isinstance(callback.message, types.Message):
+            await callback.message.edit_text("✅ Вы успешно отписались.")
         await callback.answer("Отписка оформлена!") # Всплывающее уведомление
     else:
         # Если подписка уже была удалена кем-то еще
-        await callback.message.edit_text("🤔 Похоже, вы уже отписаны.")
+        if isinstance(callback.message, types.Message):
+            await callback.message.edit_text("🤔 Похоже, вы уже отписаны.")
         await callback.answer("Подписка не найдена.", show_alert=True)
