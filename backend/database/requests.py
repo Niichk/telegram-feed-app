@@ -1,4 +1,5 @@
-from .models import User, Channel, Subscription, Base, Post
+from .models import User, Channel, Subscription, Post, BackfillRequest 
+from sqlalchemy.dialects.postgresql import insert 
 from .engine import session_maker
 from sqlalchemy import select, and_
 from sqlalchemy.orm import selectinload
@@ -93,3 +94,13 @@ async def delete_subscription(session: AsyncSession, user_id: int, channel_id: i
         return True
     
     return False
+
+async def create_backfill_request(session: AsyncSession, user_id: int):
+    """
+    Создает заявку на дозагрузку постов для пользователя.
+    Если заявка уже существует, ничего не делает (благодаря on_conflict_do_nothing).
+    """
+    stmt = insert(BackfillRequest).values(user_id=user_id)
+    stmt = stmt.on_conflict_do_nothing(index_elements=['user_id'])
+    await session.execute(stmt)
+    await session.commit()

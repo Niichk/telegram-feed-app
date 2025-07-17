@@ -5,6 +5,7 @@ from datetime import datetime
 from sqlalchemy import Text, DateTime
 from sqlalchemy.orm import relationship
 from typing import List
+from sqlalchemy.sql import func
 
 # Базовый класс для всех наших моделей
 class Base(AsyncAttrs, DeclarativeBase):
@@ -60,3 +61,12 @@ class Post(Base):
     __table_args__ = (
         UniqueConstraint('channel_id', 'message_id', name='_channel_message_uc'),
     )
+
+class BackfillRequest(Base):
+    __tablename__ = 'backfill_requests'
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    # Пользователь, для которого нужно догрузить посты
+    user_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    # Время создания заявки, устанавливается автоматически
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

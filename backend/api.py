@@ -4,7 +4,7 @@ import os
 import json
 import logging
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Header, Depends, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, AsyncGenerator
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -75,7 +75,7 @@ def is_valid_tma_data(init_data: str) -> dict | None:
 @app.get("/api/feed/", response_model=schemas.FeedResponse)
 @cache(expire=120)
 async def get_feed_for_user(
-    background_tasks: BackgroundTasks,
+    # Убираем background_tasks из параметров
     session: AsyncSession = Depends(get_db_session),
     page: int = 1,
     authorization: str | None = Header(None)
@@ -100,11 +100,10 @@ async def get_feed_for_user(
     offset = (page - 1) * limit
     feed = await db.get_user_feed(session=session, user_id=user_id, limit=limit, offset=offset)
 
-    status = "ok" # Статус по умолчанию
-    #if len(feed) < limit and page > 1: # page > 1 чтобы не запускать при первой загрузке
-        #logging.info(f"Посты для пользователя {user_id} заканчиваются. Запускаю фоновую дозагрузку.")
-        #background_tasks.add_task(backfill_user_channels, user_id)
-        #status = "backfilling" # Меняем статус, если запустили дозагрузку
+    status = "ok"
+    if len(feed) < limit and page > 1:
+        logging.info(f"Посты для пользователя {user_id} заканчиваются. Создаю заявку на дозагрузку.")
+        await db.create_backfill_request(session, user_id)
+        status = "backfilling"
 
-    # --- ИЗМЕНИ ВОЗВРАЩАЕМОЕ ЗНАЧЕНИЕ ---
     return {"posts": feed, "status": status}
