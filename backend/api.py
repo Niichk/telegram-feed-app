@@ -72,7 +72,7 @@ def is_valid_tma_data(init_data: str) -> dict | None:
         return None
 
 # Единственный, правильный эндпоинт
-@app.get("/api/feed/", response_model=List[schemas.PostInFeed])
+@app.get("/api/feed/", response_model=schemas.FeedResponse)
 @cache(expire=120)
 async def get_feed_for_user(
     background_tasks: BackgroundTasks,
@@ -100,8 +100,11 @@ async def get_feed_for_user(
     offset = (page - 1) * limit
     feed = await db.get_user_feed(session=session, user_id=user_id, limit=limit, offset=offset)
 
-    if len(feed) < limit:
-        logging.info(f"Посты для пользователя {user_id} заканчиваются. Запускаю фоновую дозагрузку.")
-        background_tasks.add_task(backfill_user_channels, user_id)
+    status = "ok" # Статус по умолчанию
+    #if len(feed) < limit and page > 1: # page > 1 чтобы не запускать при первой загрузке
+        #logging.info(f"Посты для пользователя {user_id} заканчиваются. Запускаю фоновую дозагрузку.")
+        #background_tasks.add_task(backfill_user_channels, user_id)
+        #status = "backfilling" # Меняем статус, если запустили дозагрузку
 
-    return feed
+    # --- ИЗМЕНИ ВОЗВРАЩАЕМОЕ ЗНАЧЕНИЕ ---
+    return {"posts": feed, "status": status}
