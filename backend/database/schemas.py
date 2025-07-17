@@ -1,5 +1,7 @@
 from pydantic import BaseModel, ConfigDict
 from datetime import datetime
+from typing import List
+
 
 # --- НОВАЯ СХЕМА для одного медиа-элемента ---
 class MediaItem(BaseModel):
@@ -19,3 +21,7 @@ class PostInFeed(BaseModel):
     date: datetime
     channel: ChannelInPost
     media: list[MediaItem] | None
+
+class FeedResponse(BaseModel):
+    posts: List[PostInFeed]
+    status: str

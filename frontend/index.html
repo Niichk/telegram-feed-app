@@ -218,27 +218,37 @@
     }
 
     function App() {
+        // --- СОСТОЯНИЕ ---
         const [posts, setPosts] = useState([]);
         const [error, setError] = useState(null);
-        const page = useRef(1);
         const [hasMore, setHasMore] = useState(true);
         const [isFetching, setIsFetching] = useState(false);
         const [initialLoading, setInitialLoading] = useState(true);
+        // Новое состояние для отслеживания фоновой дозагрузки
+        const [isBackfilling, setIsBackfilling] = useState(false);
         
+        // --- РЕФЫ ---
+        const page = useRef(1);
         const loader = useRef(null);
         const pullStartY = useRef(0);
         const pullDeltaY = useRef(0);
         const isPulling = useRef(false);
+        // Этот реф помогает избежать двойных запросов
         const isFetchingRef = useRef(false);
 
+        // --- ЛОГИКА ЗАГРУЗКИ ПОСТОВ ---
         const fetchPosts = useCallback(async (isRefresh = false) => {
-            if (isFetchingRef.current) return;
+            if (isFetchingRef.current && !isRefresh) return;
 
             isFetchingRef.current = true;
             setIsFetching(true);
-            
+            if(isBackfilling) setIsBackfilling(false); // Сбрасываем дозагрузку при новом запросе
+
             if (isRefresh) {
                 page.current = 1;
+                // Сбрасываем посты и ошибки при обновлении
+                setPosts([]);
+                setError(null);
             }
 
             try {
@@ -248,32 +258,50 @@
                 );
                 
                 if (!response.ok) {
-                    const errorData = await response.json().catch(() => null);
-                    throw new Error(errorData?.detail || `HTTP ошибка: ${response.status}`);
+                    const errorData = await response.json().catch(() => ({ detail: `HTTP ошибка: ${response.status}` }));
+                    throw new Error(errorData.detail);
                 }
                 
-                const newPosts = await response.json();
+                // --- ОБНОВЛЕННАЯ ЛОГИКА ОБРАБОТКИ ОТВЕТА ---
+                const responseData = await response.json();
+                const newPosts = responseData.posts;
+                const status = responseData.status;
                 
                 setPosts(prevPosts => isRefresh ? newPosts : [...prevPosts, ...newPosts]);
-                setHasMore(newPosts.length > 0);
+                
+                if (status === "backfilling") {
+                    setIsBackfilling(true); // Показываем новый лоадер
+                    setHasMore(true); // Не прекращаем скролл
+                    // Попробуем загрузить посты еще раз через 7 секунд
+                    setTimeout(() => fetchPosts(), 7000); 
+                } else {
+                    setIsBackfilling(false); // Убираем новый лоадер
+                    setHasMore(newPosts.length > 0);
+                }
+                
                 page.current += 1;
 
             } catch (err) {
                 setError(err.message);
+                setHasMore(false); // Останавливаем дальнейшие попытки при ошибке
             } finally {
-                isFetchingRef.current = false;
+                // Если не идет дозагрузка, то снимаем флаг "загружается"
+                if (!isBackfilling) {
+                    isFetchingRef.current = false;
+                }
                 setIsFetching(false);
                 setInitialLoading(false);
             }
-        }, []);
+        }, [isBackfilling]); // isBackfilling добавлено в зависимости
 
+        // --- ЛОГИКА "PULL-TO-REFRESH" ---
         const handleRefresh = useCallback(() => {
             const tg = window.Telegram.WebApp;
             tg.HapticFeedback.impactOccurred('light'); 
-            setError(null); 
             fetchPosts(true);
         }, [fetchPosts]);
 
+        // Эффект для инициализации pull-to-refresh
         useEffect(() => {
             const indicator = document.getElementById('refresh-indicator');
             if (!indicator) return;
@@ -314,11 +342,11 @@
             };
         }, [handleRefresh]);
 
+        // Эффект для первоначальной загрузки
         useEffect(() => {
             const tg = window.Telegram.WebApp;
             const init = () => {
-                const currentUserId = tg.initDataUnsafe?.user?.id;
-                if (currentUserId) { 
+                if (tg.initDataUnsafe?.user?.id) { 
                     fetchPosts();
                 } else {
                     setError("Не удалось определить пользователя Telegram. Откройте приложение через бота.");
@@ -327,16 +355,13 @@
             };
             init();
             tg.ready();
-            
-            // --- ИЗМЕНЕНО: Удалены строки, меняющие стиль body ---
-            // Теперь этим управляет CSS
+        }, []); // Убрали fetchPosts из зависимостей, чтобы избежать повторного вызова
 
-        }, [fetchPosts]);
-
+        // Эффект для бесконечной прокрутки
         useEffect(() => {
             const handleObserver = (entities) => {
                 const target = entities[0];
-                if (target.isIntersecting && hasMore && !isFetching) {
+                if (target.isIntersecting && hasMore && !isFetching && !isBackfilling) {
                     fetchPosts();
                 }
             };
@@ -344,18 +369,25 @@
             const currentLoader = loader.current;
             if (currentLoader) observer.observe(currentLoader);
             return () => { if (currentLoader) observer.unobserve(currentLoader) };
-        }, [posts, hasMore, isFetching, fetchPosts]); 
+        }, [posts, hasMore, isFetching, isBackfilling, fetchPosts]);
 
+        // --- ЛОГИКА ОТОБРАЖЕНИЯ ---
         if (initialLoading) return <div className="status-message"><div className="loader"></div></div>;
         if (error) return <div className="status-message">Ошибка: {error}</div>;
-        if (posts.length === 0 && hasMore === false) return <div className="status-message">Ваша лента пока пуста. Добавьте каналы через бота!</div>;
+        if (posts.length === 0 && !hasMore) return <div className="status-message">Ваша лента пока пуста. Добавьте каналы через бота!</div>;
 
         return (
             <div className="feed-container">
                 {posts.map(post => <PostCard key={`${post.channel_id}-${post.message_id}`} post={post} />)}
-                {isFetching && !initialLoading && (
+                
+                {/* --- ЛОГИКА ОТОБРАЖЕНИЯ ЛОАДЕРОВ ИЗМЕНЕНА --- */}
+                {isFetching && !initialLoading && !isBackfilling && (
                     <div className="loader-container"><div className="loader"></div></div>
                 )}
+                {isBackfilling && (
+                    <div className="status-message">Догружаем старые посты... ⏳</div>
+                )}
+                
                 <div ref={loader} />
             </div>
         );

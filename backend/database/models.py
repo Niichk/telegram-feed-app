@@ -1,5 +1,5 @@
-from sqlalchemy import BigInteger, String, ForeignKey, JSON
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy import BigInteger, String, ForeignKey, Text, DateTime, JSON, UniqueConstraint
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.ext.asyncio import AsyncAttrs
 from datetime import datetime
 from sqlalchemy import Text, DateTime
@@ -47,19 +47,16 @@ class Post(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     channel_id: Mapped[int] = mapped_column(ForeignKey('channels.id'))
-    # message_id теперь будет ID первого сообщения в альбоме или единственного
     message_id: Mapped[int] = mapped_column() 
     text: Mapped[str] = mapped_column(Text, nullable=True)
     date: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-
-    # --- ИЗМЕНЕНИЯ ДЛЯ ГРУППИРОВКИ ---
-    # Уникальный ID альбома от Telegram
     grouped_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=True, index=True)
-    # Поле для хранения списка медиа: [{'type': 'photo', 'url': '...'}, ...]
     media: Mapped[list[dict]] = mapped_column(JSON, nullable=True)
     
-    # --- СТАРЫЕ ПОЛЯ УДАЛЕНЫ ---
-    # media_type: Mapped[str]
-    # media_url: Mapped[str]
-    
     channel: Mapped["Channel"] = relationship(back_populates="posts")
+
+    # 2. ДОБАВЬ ЭТОТ БЛОК В КОНЕЦ КЛАССА
+    # Он создает правило уникальности для пары "канал-сообщение"
+    __table_args__ = (
+        UniqueConstraint('channel_id', 'message_id', name='_channel_message_uc'),
+    )
