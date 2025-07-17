@@ -1,5 +1,5 @@
 from aiogram import Router, types, F
-from aiogram.filters import Command
+from aiogram.filters import Command, or_f
 from sqlalchemy.ext.asyncio import AsyncSession
 from database.requests import get_user_subscriptions
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
@@ -34,12 +34,12 @@ async def cmd_help(message: types.Message):
         "**Как пользоваться:**\n"
         "1. **Добавить канал:** Перешлите в бот любой пост из публичного канала.\n"
         "2. **Просмотр подписок:** Нажмите кнопку '📜 Мои подписки' или введите команду /subscriptions.\n"
-        "3. **Читать ленту:** Нажмите на кнопку 'Открыть ленту' слева",
+        "3. **Читать ленту:** Нажмите на кнопку 'Открыть ленту' слева от чата, или снизу",
         reply_markup=builder.as_markup(),
         parse_mode="Markdown"
     )
 
-@router.message((Command("subscriptions")) | (F.text == "📜 Мои подписки"))
+@router.message(or_f(Command("subscriptions"), F.text == "📜 Мои подписки"))
 async def cmd_subscriptions(message: types.Message, session: AsyncSession):
     if not message.from_user:
         await message.answer("Не могу определить ваш профиль.")
