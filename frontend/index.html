@@ -221,34 +221,36 @@
         // --- СОСТОЯНИЕ ---
         const [posts, setPosts] = useState([]);
         const [error, setError] = useState(null);
+        // hasMore теперь отражает, есть ли вообще еще посты, включая дозагрузку
         const [hasMore, setHasMore] = useState(true);
         const [isFetching, setIsFetching] = useState(false);
         const [initialLoading, setInitialLoading] = useState(true);
-        // Новое состояние для отслеживания фоновой дозагрузки
+        // Это состояние теперь будет просто показывать сообщение о дозагрузке
         const [isBackfilling, setIsBackfilling] = useState(false);
-        
+
         // --- РЕФЫ ---
         const page = useRef(1);
         const loader = useRef(null);
         const pullStartY = useRef(0);
         const pullDeltaY = useRef(0);
         const isPulling = useRef(false);
-        // Этот реф помогает избежать двойных запросов
         const isFetchingRef = useRef(false);
 
         // --- ЛОГИКА ЗАГРУЗКИ ПОСТОВ ---
         const fetchPosts = useCallback(async (isRefresh = false) => {
-            if (isFetchingRef.current && !isRefresh) return;
+            // Защита от двойных запросов
+            if (isFetchingRef.current) return;
+            // Если посты закончились, не делаем ничего
+            if (!hasMore && !isRefresh) return;
 
             isFetchingRef.current = true;
             setIsFetching(true);
-            if(isBackfilling) setIsBackfilling(false); // Сбрасываем дозагрузку при новом запросе
-
             if (isRefresh) {
                 page.current = 1;
-                // Сбрасываем посты и ошибки при обновлении
                 setPosts([]);
                 setError(null);
+                setHasMore(true); // При обновлении всегда есть надежда на новые посты
+                setIsBackfilling(false); // Сбрасываем статус дозагрузки
             }
 
             try {
@@ -262,37 +264,34 @@
                     throw new Error(errorData.detail);
                 }
                 
-                // --- ОБНОВЛЕННАЯ ЛОГИКА ОБРАБОТКИ ОТВЕТА ---
                 const responseData = await response.json();
                 const newPosts = responseData.posts;
                 const status = responseData.status;
-                
-                setPosts(prevPosts => isRefresh ? newPosts : [...prevPosts, ...newPosts]);
-                
+
+                if (newPosts.length > 0) {
+                    setPosts(prevPosts => isRefresh ? newPosts : [...prevPosts, ...newPosts]);
+                    page.current += 1;
+                }
+
+                // --- УПРОЩЕННАЯ ЛОГИКА ---
                 if (status === "backfilling") {
-                    setIsBackfilling(true); // Показываем новый лоадер
-                    setHasMore(true); // Не прекращаем скролл
-                    // Попробуем загрузить посты еще раз через 7 секунд
-                    setTimeout(() => fetchPosts(), 7000); 
+                    setIsBackfilling(true);
+                    // Говорим, что постов больше нет (пока), чтобы остановить автозагрузку
+                    setHasMore(false); 
                 } else {
-                    setIsBackfilling(false); // Убираем новый лоадер
+                    // Если дозагрузки нет, то есть ли еще посты, зависит от ответа
                     setHasMore(newPosts.length > 0);
                 }
-                
-                page.current += 1;
 
             } catch (err) {
                 setError(err.message);
-                setHasMore(false); // Останавливаем дальнейшие попытки при ошибке
+                setHasMore(false);
             } finally {
-                // Если не идет дозагрузка, то снимаем флаг "загружается"
-                if (!isBackfilling) {
-                    isFetchingRef.current = false;
-                }
+                isFetchingRef.current = false;
                 setIsFetching(false);
                 setInitialLoading(false);
             }
-        }, [isBackfilling]); // isBackfilling добавлено в зависимости
+        }, [hasMore]); // Убрали isBackfilling из зависимостей
 
         // --- ЛОГИКА "PULL-TO-REFRESH" ---
         const handleRefresh = useCallback(() => {
@@ -301,91 +300,60 @@
             fetchPosts(true);
         }, [fetchPosts]);
 
-        // Эффект для инициализации pull-to-refresh
+        // Эффект для инициализации pull-to-refresh (без изменений)
         useEffect(() => {
             const indicator = document.getElementById('refresh-indicator');
             if (!indicator) return;
-
-            const handleTouchStart = (e) => {
-                if (window.scrollY === 0) {
-                    pullStartY.current = e.touches[0].clientY;
-                    isPulling.current = true;
-                }
-            };
-            const handleTouchMove = (e) => {
-                if (!isPulling.current) return;
-                const delta = e.touches[0].clientY - pullStartY.current;
-                if (delta > 0) {
-                    pullDeltaY.current = delta;
-                    indicator.style.top = `${Math.min(delta, 100) - 50}px`;
-                }
-            };
-            const handleTouchEnd = () => {
-                if (!isPulling.current) return;
-                if (pullDeltaY.current > 70) {
-                    indicator.style.top = '20px';
-                    handleRefresh(); 
-                    setTimeout(() => { indicator.style.top = '-50px'; }, 1000);
-                } else {
-                    indicator.style.top = '-50px';
-                }
-                isPulling.current = false;
-                pullDeltaY.current = 0;
-            };
-            window.addEventListener('touchstart', handleTouchStart);
-            window.addEventListener('touchmove', handleTouchMove);
-            window.addEventListener('touchend', handleTouchEnd);
-            return () => {
-                window.removeEventListener('touchstart', handleTouchStart);
-                window.removeEventListener('touchmove', handleTouchMove);
-                window.removeEventListener('touchend', handleTouchEnd);
-            };
+            const handleTouchStart = (e) => { if (window.scrollY === 0) { pullStartY.current = e.touches[0].clientY; isPulling.current = true; } };
+            const handleTouchMove = (e) => { if (!isPulling.current) return; const delta = e.touches[0].clientY - pullStartY.current; if (delta > 0) { pullDeltaY.current = delta; indicator.style.top = `${Math.min(delta, 100) - 50}px`; } };
+            const handleTouchEnd = () => { if (!isPulling.current) return; if (pullDeltaY.current > 70) { indicator.style.top = '20px'; handleRefresh(); setTimeout(() => { indicator.style.top = '-50px'; }, 1000); } else { indicator.style.top = '-50px'; } isPulling.current = false; pullDeltaY.current = 0; };
+            window.addEventListener('touchstart', handleTouchStart); window.addEventListener('touchmove', handleTouchMove); window.addEventListener('touchend', handleTouchEnd);
+            return () => { window.removeEventListener('touchstart', handleTouchStart); window.removeEventListener('touchmove', handleTouchMove); window.removeEventListener('touchend', handleTouchEnd); };
         }, [handleRefresh]);
 
-        // Эффект для первоначальной загрузки
+        // Эффект для первоначальной загрузки (без изменений)
         useEffect(() => {
             const tg = window.Telegram.WebApp;
-            const init = () => {
-                if (tg.initDataUnsafe?.user?.id) { 
-                    fetchPosts();
-                } else {
-                    setError("Не удалось определить пользователя Telegram. Откройте приложение через бота.");
-                    setInitialLoading(false);
-                }
-            };
+            const init = () => { if (tg.initDataUnsafe?.user?.id) { fetchPosts(); } else { setError("Не удалось определить пользователя Telegram. Откройте приложение через бота."); setInitialLoading(false); } };
             init();
             tg.ready();
-        }, []); // Убрали fetchPosts из зависимостей, чтобы избежать повторного вызова
+        }, []); 
 
-        // Эффект для бесконечной прокрутки
+        // Эффект для бесконечной прокрутки (без изменений)
         useEffect(() => {
             const handleObserver = (entities) => {
                 const target = entities[0];
-                if (target.isIntersecting && hasMore && !isFetching && !isBackfilling) {
+                if (target.isIntersecting && hasMore && !isFetching) {
                     fetchPosts();
                 }
             };
             const observer = new IntersectionObserver(handleObserver, { rootMargin: '200px' });
             const currentLoader = loader.current;
-            if (currentLoader) observer.observe(currentLoader);
-            return () => { if (currentLoader) observer.unobserve(currentLoader) };
-        }, [posts, hasMore, isFetching, isBackfilling, fetchPosts]);
+            if (currentLoader) { observer.observe(currentLoader); }
+            return () => { if (currentLoader) { observer.unobserve(currentLoader); } };
+        }, [posts, hasMore, isFetching, fetchPosts]);
 
         // --- ЛОГИКА ОТОБРАЖЕНИЯ ---
         if (initialLoading) return <div className="status-message"><div className="loader"></div></div>;
         if (error) return <div className="status-message">Ошибка: {error}</div>;
-        if (posts.length === 0 && !hasMore) return <div className="status-message">Ваша лента пока пуста. Добавьте каналы через бота!</div>;
+        if (posts.length === 0 && !hasMore && !isBackfilling) return <div className="status-message">Ваша лента пока пуста. Добавьте каналы через бота!</div>;
 
         return (
             <div className="feed-container">
                 {posts.map(post => <PostCard key={`${post.channel_id}-${post.message_id}`} post={post} />)}
                 
-                {/* --- ЛОГИКА ОТОБРАЖЕНИЯ ЛОАДЕРОВ ИЗМЕНЕНА --- */}
-                {isFetching && !initialLoading && !isBackfilling && (
+                {/* Обычный лоадер */}
+                {isFetching && !initialLoading && (
                     <div className="loader-container"><div className="loader"></div></div>
                 )}
+                
+                {/* Сообщение о дозагрузке */}
                 {isBackfilling && (
-                    <div className="status-message">Догружаем старые посты... ⏳</div>
+                    <div className="status-message">
+                        Догружаем старые посты... ⏳
+                        <br/>
+                        <small>Потяните, чтобы обновить.</small>
+                    </div>
                 )}
                 
                 <div ref={loader} />
