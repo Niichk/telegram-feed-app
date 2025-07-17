@@ -102,8 +102,18 @@ async def get_feed_for_user(
 
     status = "ok"
     if len(feed) < limit and page > 1:
-        logging.info(f"Посты для пользователя {user_id} заканчиваются. Создаю заявку на дозагрузку.")
-        await db.create_backfill_request(session, user_id)
+        # Сначала проверяем, существует ли уже заявка
+        request_exists = await db.check_backfill_request_exists(session, user_id)
+        
+        if not request_exists:
+            # И только если заявки нет, создаем новую
+            logging.info(f"Посты для пользователя {user_id} заканчиваются. Создаю заявку на дозагрузку.")
+            await db.create_backfill_request(session, user_id)
+        else:
+            # Если заявка уже есть, просто сообщаем об этом в лог
+            logging.info(f"Заявка на дозагрузку для пользователя {user_id} уже существует. Ожидаем выполнения.")
+
+        # В любом случае сообщаем фронтенду, что идет дозагрузка
         status = "backfilling"
 
     return {"posts": feed, "status": status}

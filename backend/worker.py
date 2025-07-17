@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 
 # Убираем drop_db, оставляем только create_db
 from database.engine import session_maker, create_db
-from database.models import Channel, Post
+from database.models import Channel, Post, BackfillRequest
 from telethon.sessions import StringSession
 from io import BytesIO
 from datetime import datetime
@@ -42,7 +42,7 @@ if API_ID_STR is None:
     raise ValueError("API_ID environment variable is not set!")
 API_ID = int(API_ID_STR)
 POST_LIMIT = 10
-SLEEP_TIME = 300
+SLEEP_TIME = 60
 
 # --- Инициализация клиентов ---
 if SESSION_STRING is None:
@@ -249,16 +249,48 @@ async def periodic_task():
             # Вызываем новую функцию для каждого канала
             await fetch_posts_for_channel(channel, db_session, post_limit=POST_LIMIT)
 
+async def process_backfill_requests():
+    """
+    Проверяет и обрабатывает заявки на дозагрузку.
+    """
+    logging.info("Проверяю наличие заявок на дозагрузку...")
+    async with session_maker() as db_session:
+        # Находим все существующие заявки
+        result = await db_session.execute(select(BackfillRequest))
+        requests = result.scalars().all()
+
+        if not requests:
+            logging.info("Новых заявок нет.")
+            return
+
+        for req in requests:
+            logging.info(f"Найдена заявка для пользователя {req.user_id}. Начинаю обработку.")
+            # Для каждой заявки вызываем нашу старую добрую функцию дозагрузки
+            await backfill_user_channels(req.user_id)
+            
+            # После успешной обработки удаляем заявку
+            await db_session.delete(req)
+        
+        await db_session.commit()
+        logging.info("Все заявки обработаны.")
+
 
 async def main():
     await create_db()
-    logging.info("Worker: New database tables created.")
+    logging.info("Worker: Database tables checked/created.")
 
     async with client:
         logging.info("Клиент Telethon запущен.")
+        # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
+        # Теперь воркер будет выполнять ДВЕ задачи одновременно:
+        # 1. Регулярно собирать новые посты (periodic_task)
+        # 2. Регулярно проверять и обрабатывать заявки на дозагрузку (process_backfill_requests)
         while True:
-            await periodic_task()
-            logging.info(f"Засыпаю на {SLEEP_TIME / 60:.1f} минут...")
+            await asyncio.gather(
+                periodic_task(),
+                process_backfill_requests()
+            )
+            logging.info(f"Все задачи выполнены. Засыпаю на {SLEEP_TIME / 60:.1f} минут...")
             await asyncio.sleep(SLEEP_TIME)
 
 

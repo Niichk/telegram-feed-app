@@ -104,3 +104,12 @@ async def create_backfill_request(session: AsyncSession, user_id: int):
     stmt = stmt.on_conflict_do_nothing(index_elements=['user_id'])
     await session.execute(stmt)
     await session.commit()
+
+async def check_backfill_request_exists(session: AsyncSession, user_id: int) -> bool:
+    """
+    Проверяет, существует ли уже заявка на дозагрузку для пользователя.
+    Возвращает True, если заявка есть, иначе False.
+    """
+    stmt = select(BackfillRequest).where(BackfillRequest.user_id == user_id)
+    result = await session.execute(stmt)
+    return result.scalars().first() is not None
