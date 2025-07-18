@@ -11,14 +11,46 @@
     <style>
         /* --- Базовые стили --- */
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Leelawadee', Roboto, Helvetica, Arial, sans-serif;
             margin: 0;
-            padding: 12px;
-            overscroll-behavior-y: contain; /* Предотвращает "отскок" страницы */
+            /* ИЗМЕНЕНО: было padding: 12px, стало padding: 72px 12px 12px; */
+            padding: 72px 12px 12px;
+            overscroll-behavior-y: contain;
 
-            /* --- ИЗМЕНЕНО: Используем переменные темы Telegram --- */
             background-color: var(--tg-theme-bg-color);
             color: var(--tg-theme-text-color);
+        }
+
+        .app-header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            background-color: var(--tg-theme-secondary-bg-color);
+            padding: 8px 12px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+            display: flex;
+            justify-content: flex-end; /* Выравниваем кнопки по правому краю */
+            gap: 8px; /* Расстояние между кнопками */
+            z-index: 100;
+            border-bottom: 1px solid var(--tg-theme-hint-color);
+            transform: translateZ(0); /* Фикс для рендеринга на некоторых устройствах */
+        }
+
+        .header-button {
+            padding: 6px 12px;
+            border: 1px solid var(--tg-theme-button-color);
+            background-color: transparent;
+            color: var(--tg-theme-button-color);
+            border-radius: 8px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .header-button:hover, .header-button:active {
+            background-color: var(--tg-theme-button-color);
+            color: var(--tg-theme-button-text-color);
         }
 
         .feed-container {
@@ -297,6 +329,16 @@
         );
     }
 
+    function Header({ onRefresh, onScrollUp }) {
+        return (
+            <header className="app-header">
+                {/* И меняем текст и вызов функции здесь */}
+                <button onClick={onScrollUp} className="header-button">Вверх ⬆️</button>
+                <button onClick={onRefresh} className="header-button">Обновить 🔄</button>
+            </header>
+        );
+    }
+
     function App() {
         // --- СОСТОЯНИЕ ---
         const [posts, setPosts] = useState([]);
@@ -376,9 +418,17 @@
         // --- ЛОГИКА "PULL-TO-REFRESH" ---
         const handleRefresh = useCallback(() => {
             const tg = window.Telegram.WebApp;
+            // Даем виброотклик при обновлении
             tg.HapticFeedback.impactOccurred('light'); 
             fetchPosts(true);
         }, [fetchPosts]);
+
+        const scrollToTop = () => {
+            window.scrollTo({
+                top: 0, // Прокручиваем к самому верху страницы
+                behavior: 'smooth' // Делаем это плавно
+            });
+        };
 
         // Эффект для инициализации pull-to-refresh (без изменений)
         useEffect(() => {
@@ -418,26 +468,31 @@
         if (error) return <div className="status-message">Ошибка: {error}</div>;
         if (posts.length === 0 && !hasMore && !isBackfilling) return <div className="status-message">Ваша лента пока пуста. Добавьте каналы через бота!</div>;
 
+        // --- ИЗМЕНЕНО: Оборачиваем вывод в пустой тег <> и добавляем Header ---
         return (
-            <div className="feed-container">
-                {posts.map(post => <PostCard key={`${post.channel_id}-${post.message_id}`} post={post} />)}
-                
-                {/* Обычный лоадер */}
-                {isFetching && !initialLoading && (
-                    <div className="loader-container"><div className="loader"></div></div>
-                )}
-                
-                {/* Сообщение о дозагрузке */}
-                {isBackfilling && (
-                    <div className="status-message">
-                        Догружаем старые посты... ⏳
-                        <br/>
-                        <small>Потяните, чтобы обновить.</small>
-                    </div>
-                )}
-                
-                <div ref={loader} />
-            </div>
+            <>
+                {/* Передаем scrollToTop в пропс onScrollUp */}
+                <Header onRefresh={handleRefresh} onScrollUp={scrollToTop} />
+
+                <div className="feed-container">
+                    {/* ...остальная часть твоего JSX без изменений... */}
+                    {posts.map(post => <PostCard key={`${post.channel_id}-${post.message_id}`} post={post} />)}
+                    
+                    {isFetching && !initialLoading && (
+                        <div className="loader-container"><div className="loader"></div></div>
+                    )}
+                    
+                    {isBackfilling && (
+                        <div className="status-message">
+                            Догружаем старые посты... ⏳
+                            <br/>
+                            <small>Потяните, чтобы обновить.</small>
+                        </div>
+                    )}
+                    
+                    <div ref={loader} />
+                </div>
+            </>
         );
     }
 
