@@ -208,13 +208,33 @@
 
     // ИСПРАВЛЕНО: Компонент хедера теперь с правильной логикой "Вверх"
     function Header({ onRefresh, onScrollUp }) {
-        const handleTouchStart = (e) => e.currentTarget.classList.add('button--active');
-        const handleTouchEnd = (e) => e.currentTarget.classList.remove('button--active');
+        const handleTouchStart = (e) => {
+            e.currentTarget.classList.add('button--active');
+        };
+
+        const handleTouchEnd = (e) => {
+            const button = e.currentTarget;
+            setTimeout(() => {
+                button.classList.remove('button--active');
+            }, 150); // 150ms задержка для визуального эффекта
+        };
         
         return (
             <header className="app-header">
-                <button onClick={(e) => onScrollUp(e)} className="header-button">Вверх ⬆️</button>
-                <button onClick={(e) => onRefresh(e)} className="header-button">Обновить 🔄</button>
+                <button 
+                    onClick={onScrollUp}
+                    onTouchStart={handleTouchStart}
+                    onTouchEnd={handleTouchEnd}
+                    className="header-button">
+                    Вверх ⬆️
+                </button>
+                <button 
+                    onClick={onRefresh}
+                    onTouchStart={handleTouchStart}
+                    onTouchEnd={handleTouchEnd}
+                    className="header-button">
+                    Обновить 🔄
+                </button>
             </header>
         );
     }
@@ -254,15 +274,12 @@
         }, [hasMore]);
 
         // ИСПРАВЛЕНО: Добавлен event для вызова blur()
-        const handleRefresh = useCallback((event) => {
-            if (event && event.currentTarget) event.currentTarget.blur();
+        const handleRefresh = useCallback(() => {
             window.Telegram.WebApp.HapticFeedback.impactOccurred('light'); 
             fetchPosts(true);
         }, [fetchPosts]);
 
-        // ИСПРАВЛЕНО: Добавлена функция прокрутки вверх и вызов blur()
-        const scrollToTop = (event) => {
-            if (event && event.currentTarget) { event.currentTarget.blur(); }
+        const scrollToTop = () => {
             window.scrollTo({ top: 0, behavior: 'smooth' });
         };
 
