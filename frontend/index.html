@@ -53,6 +53,11 @@
             color: var(--tg-theme-button-text-color);
         }
 
+        /* ИСПРАВЛЕНИЕ 1: Убираем фокус с кнопок */
+        .header-button:focus {
+            outline: none;
+        }
+
         .feed-container {
             max-width: 600px;
             margin: 0 auto;
@@ -170,7 +175,8 @@
         /* --- Стили для Pull-to-Refresh --- */
         .pull-to-refresh-loader {
             position: absolute;
-            top: -50px;
+            /* ИСПРАВЛЕНИЕ 2: Изменяем top с -50px на 22px, чтобы быть под хедером */
+            top: 22px;
             left: 50%;
             transform: translateX(-50%);
             border-radius: 50%;
@@ -180,8 +186,8 @@
             width: 40px;
             height: 40px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            /* ИЗМЕНЕНО: z-index должен быть больше, чем у хедера */
-            z-index: 101; 
+            /* z-index остается меньше хедера */
+            z-index: 50; 
             transition: top 0.2s ease-out;
             background-color: var(--tg-theme-secondary-bg-color);
         }
@@ -332,25 +338,22 @@
     function Header({ onRefresh, onScrollUp }) {
         return (
             <header className="app-header">
-                {/* ИЗМЕНЕНО: передаем event в обработчики */}
-                <button onClick={(event) => onScrollUp(event)} className="header-button">Вверх ⬆️</button>
-                <button onClick={(event) => onRefresh(event)} className="header-button">Обновить 🔄</button>
+                {/* ИСПРАВЛЕНИЕ 1: Убираем фокус после клика через setTimeout */}
+                <button onClick={(event) => { onScrollUp(event); setTimeout(() => event.target.blur(), 100); }} className="header-button">Вверх ⬆️</button>
+                <button onClick={(event) => { onRefresh(event); setTimeout(() => event.target.blur(), 100); }} className="header-button">Обновить 🔄</button>
             </header>
         );
     }
 
     function App() {
-        // --- СОСТОЯНИЕ ---
+        // ... остальной код без изменений
         const [posts, setPosts] = useState([]);
         const [error, setError] = useState(null);
-        // hasMore теперь отражает, есть ли вообще еще посты, включая дозагрузку
         const [hasMore, setHasMore] = useState(true);
         const [isFetching, setIsFetching] = useState(false);
         const [initialLoading, setInitialLoading] = useState(true);
-        // Это состояние теперь будет просто показывать сообщение о дозагрузке
         const [isBackfilling, setIsBackfilling] = useState(false);
 
-        // --- РЕФЫ ---
         const page = useRef(1);
         const loader = useRef(null);
         const pullStartY = useRef(0);
@@ -358,11 +361,8 @@
         const isPulling = useRef(false);
         const isFetchingRef = useRef(false);
 
-        // --- ЛОГИКА ЗАГРУЗКИ ПОСТОВ ---
         const fetchPosts = useCallback(async (isRefresh = false) => {
-            // Защита от двойных запросов
             if (isFetchingRef.current) return;
-            // Если посты закончились, не делаем ничего
             if (!hasMore && !isRefresh) return;
 
             isFetchingRef.current = true;
@@ -371,8 +371,8 @@
                 page.current = 1;
                 setPosts([]);
                 setError(null);
-                setHasMore(true); // При обновлении всегда есть надежда на новые посты
-                setIsBackfilling(false); // Сбрасываем статус дозагрузки
+                setHasMore(true);
+                setIsBackfilling(false);
             }
 
             try {
@@ -395,13 +395,10 @@
                     page.current += 1;
                 }
 
-                // --- УПРОЩЕННАЯ ЛОГИКА ---
                 if (status === "backfilling") {
                     setIsBackfilling(true);
-                    // Говорим, что постов больше нет (пока), чтобы остановить автозагрузку
                     setHasMore(false); 
                 } else {
-                    // Если дозагрузки нет, то есть ли еще посты, зависит от ответа
                     setHasMore(newPosts.length > 0);
                 }
 
@@ -413,11 +410,9 @@
                 setIsFetching(false);
                 setInitialLoading(false);
             }
-        }, [hasMore]); // Убрали isBackfilling из зависимостей
+        }, [hasMore]);
 
-        // --- ЛОГИКА "PULL-TO-REFRESH" ---
         const handleRefresh = useCallback((event) => {
-            // Если функция вызвана по клику, убираем фокус
             if (event && event.currentTarget) {
                 event.currentTarget.blur();
             }
@@ -426,9 +421,7 @@
             fetchPosts(true);
         }, [fetchPosts]);
 
-        // Обновленная функция scrollToTop
         const scrollToTop = (event) => {
-            // Убираем фокус с кнопки
             if (event && event.currentTarget) {
                 event.currentTarget.blur();
             }
@@ -438,18 +431,17 @@
             });
         };
 
-        // Эффект для инициализации pull-to-refresh (без изменений)
+        // ИСПРАВЛЕНИЕ 2: Обновляем позиции для pull-to-refresh
         useEffect(() => {
             const indicator = document.getElementById('refresh-indicator');
             if (!indicator) return;
             const handleTouchStart = (e) => { if (window.scrollY === 0) { pullStartY.current = e.touches[0].clientY; isPulling.current = true; } };
-            const handleTouchMove = (e) => { if (!isPulling.current) return; const delta = e.touches[0].clientY - pullStartY.current; if (delta > 0) { pullDeltaY.current = delta; indicator.style.top = `${Math.min(delta, 100) - 50}px`; } };
-            const handleTouchEnd = () => { if (!isPulling.current) return; if (pullDeltaY.current > 70) { indicator.style.top = '60px'; handleRefresh(); setTimeout(() => { indicator.style.top = '-50px'; }, 1000); } else { indicator.style.top = '-50px'; } isPulling.current = false; pullDeltaY.current = 0; };
+            const handleTouchMove = (e) => { if (!isPulling.current) return; const delta = e.touches[0].clientY - pullStartY.current; if (delta > 0) { pullDeltaY.current = delta; indicator.style.top = `${Math.min(delta + 22, 122)}px`; } };
+            const handleTouchEnd = () => { if (!isPulling.current) return; if (pullDeltaY.current > 70) { indicator.style.top = '132px'; handleRefresh(); setTimeout(() => { indicator.style.top = '22px'; }, 1000); } else { indicator.style.top = '22px'; } isPulling.current = false; pullDeltaY.current = 0; };
             window.addEventListener('touchstart', handleTouchStart); window.addEventListener('touchmove', handleTouchMove); window.addEventListener('touchend', handleTouchEnd);
             return () => { window.removeEventListener('touchstart', handleTouchStart); window.removeEventListener('touchmove', handleTouchMove); window.removeEventListener('touchend', handleTouchEnd); };
         }, [handleRefresh]);
 
-        // Эффект для первоначальной загрузки (без изменений)
         useEffect(() => {
             const tg = window.Telegram.WebApp;
             const init = () => { if (tg.initDataUnsafe?.user?.id) { fetchPosts(); } else { setError("Не удалось определить пользователя Telegram. Откройте приложение через бота."); setInitialLoading(false); } };
@@ -457,7 +449,6 @@
             tg.ready();
         }, []); 
 
-        // Эффект для бесконечной прокрутки (без изменений)
         useEffect(() => {
             const handleObserver = (entities) => {
                 const target = entities[0];
@@ -471,19 +462,15 @@
             return () => { if (currentLoader) { observer.unobserve(currentLoader); } };
         }, [posts, hasMore, isFetching, fetchPosts]);
 
-        // --- ЛОГИКА ОТОБРАЖЕНИЯ ---
         if (initialLoading) return <div className="status-message"><div className="loader"></div></div>;
         if (error) return <div className="status-message">Ошибка: {error}</div>;
         if (posts.length === 0 && !hasMore && !isBackfilling) return <div className="status-message">Ваша лента пока пуста. Добавьте каналы через бота!</div>;
 
-        // --- ИЗМЕНЕНО: Оборачиваем вывод в пустой тег <> и добавляем Header ---
         return (
             <>
-                {/* Передаем scrollToTop в пропс onScrollUp */}
                 <Header onRefresh={handleRefresh} onScrollUp={scrollToTop} />
 
                 <div className="feed-container">
-                    {/* ...остальная часть твоего JSX без изменений... */}
                     {posts.map(post => <PostCard key={`${post.channel_id}-${post.message_id}`} post={post} />)}
                     
                     {isFetching && !initialLoading && (
