@@ -180,9 +180,9 @@
             width: 40px;
             height: 40px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            z-index: 10;
+            /* ИЗМЕНЕНО: z-index должен быть больше, чем у хедера */
+            z-index: 101; 
             transition: top 0.2s ease-out;
-            /* --- ИЗМЕНЕНО: Используем переменную темы --- */
             background-color: var(--tg-theme-secondary-bg-color);
         }
 
@@ -332,9 +332,9 @@
     function Header({ onRefresh, onScrollUp }) {
         return (
             <header className="app-header">
-                {/* И меняем текст и вызов функции здесь */}
-                <button onClick={onScrollUp} className="header-button">Вверх ⬆️</button>
-                <button onClick={onRefresh} className="header-button">Обновить 🔄</button>
+                {/* ИЗМЕНЕНО: передаем event в обработчики */}
+                <button onClick={(event) => onScrollUp(event)} className="header-button">Вверх ⬆️</button>
+                <button onClick={(event) => onRefresh(event)} className="header-button">Обновить 🔄</button>
             </header>
         );
     }
@@ -416,17 +416,25 @@
         }, [hasMore]); // Убрали isBackfilling из зависимостей
 
         // --- ЛОГИКА "PULL-TO-REFRESH" ---
-        const handleRefresh = useCallback(() => {
+        const handleRefresh = useCallback((event) => {
+            // Если функция вызвана по клику, убираем фокус
+            if (event && event.currentTarget) {
+                event.currentTarget.blur();
+            }
             const tg = window.Telegram.WebApp;
-            // Даем виброотклик при обновлении
             tg.HapticFeedback.impactOccurred('light'); 
             fetchPosts(true);
         }, [fetchPosts]);
 
-        const scrollToTop = () => {
+        // Обновленная функция scrollToTop
+        const scrollToTop = (event) => {
+            // Убираем фокус с кнопки
+            if (event && event.currentTarget) {
+                event.currentTarget.blur();
+            }
             window.scrollTo({
-                top: 0, // Прокручиваем к самому верху страницы
-                behavior: 'smooth' // Делаем это плавно
+                top: 0,
+                behavior: 'smooth'
             });
         };
 
@@ -436,7 +444,7 @@
             if (!indicator) return;
             const handleTouchStart = (e) => { if (window.scrollY === 0) { pullStartY.current = e.touches[0].clientY; isPulling.current = true; } };
             const handleTouchMove = (e) => { if (!isPulling.current) return; const delta = e.touches[0].clientY - pullStartY.current; if (delta > 0) { pullDeltaY.current = delta; indicator.style.top = `${Math.min(delta, 100) - 50}px`; } };
-            const handleTouchEnd = () => { if (!isPulling.current) return; if (pullDeltaY.current > 70) { indicator.style.top = '20px'; handleRefresh(); setTimeout(() => { indicator.style.top = '-50px'; }, 1000); } else { indicator.style.top = '-50px'; } isPulling.current = false; pullDeltaY.current = 0; };
+            const handleTouchEnd = () => { if (!isPulling.current) return; if (pullDeltaY.current > 70) { indicator.style.top = '60px'; handleRefresh(); setTimeout(() => { indicator.style.top = '-50px'; }, 1000); } else { indicator.style.top = '-50px'; } isPulling.current = false; pullDeltaY.current = 0; };
             window.addEventListener('touchstart', handleTouchStart); window.addEventListener('touchmove', handleTouchMove); window.addEventListener('touchend', handleTouchEnd);
             return () => { window.removeEventListener('touchstart', handleTouchStart); window.removeEventListener('touchmove', handleTouchMove); window.removeEventListener('touchend', handleTouchEnd); };
         }, [handleRefresh]);
