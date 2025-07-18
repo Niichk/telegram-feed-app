@@ -53,13 +53,6 @@
             color: var(--tg-theme-button-text-color);
         }
 
-        .header-button:focus {
-            outline: none;
-            box-shadow: none;
-            background-color: transparent;
-            color: var(--tg-theme-button-color);
-        }
-
         .feed-container {
             max-width: 600px;
             margin: 0 auto;
@@ -111,7 +104,7 @@
             display: flex; align-items: center; justify-content: center;
             width: 40px; height: 40px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             /* ИСПРАВЛЕНО: z-index должен быть выше хедера */
-            z-index: 101;
+            z-index: 99;
             transition: top 0.2s ease-out;
             background-color: var(--tg-theme-secondary-bg-color);
         }
@@ -250,9 +243,8 @@
 
         // ИСПРАВЛЕНО: Добавлен event для вызова blur()
         const handleRefresh = useCallback((event) => {
-            if (event && event.currentTarget) { event.currentTarget.blur(); }
-            const tg = window.Telegram.WebApp;
-            tg.HapticFeedback.impactOccurred('light'); 
+            if (event && event.currentTarget) event.currentTarget.blur();
+            window.Telegram.WebApp.HapticFeedback.impactOccurred('light'); 
             fetchPosts(true);
         }, [fetchPosts]);
 
@@ -265,50 +257,20 @@
         useEffect(() => {
             const indicator = document.getElementById('refresh-indicator');
             if (!indicator) return;
-            
-            const handleTouchStart = (e) => { 
-                if (window.scrollY === 0) { 
-                    pullStartY.current = e.touches[0].clientY; 
-                    isPulling.current = true; 
-                }
+            const handleTouchStart = (e) => { if (window.scrollY === 0) { pullStartY.current = e.touches[0].clientY; isPulling.current = true; } };
+            const handleTouchMove = (e) => { if (!isPulling.current) return; const delta = e.touches[0].clientY - pullStartY.current; if (delta > 0) { pullDeltaY.current = delta; indicator.style.top = `${Math.min(delta, 100) - 50}px`; } };
+            const handleTouchEnd = () => {
+                if (!isPulling.current) return;
+                if (pullDeltaY.current > 70) {
+                    // ИСПРАВЛЕНО: Упрощенная и более надежная позиция для лоадера
+                    indicator.style.top = '60px'; 
+                    handleRefresh();
+                    setTimeout(() => { indicator.style.top = '-50px'; }, 1000);
+                } else { indicator.style.top = '-50px'; }
+                isPulling.current = false; pullDeltaY.current = 0;
             };
-            
-            const handleTouchMove = (e) => { 
-                if (!isPulling.current) return; 
-                const delta = e.touches[0].clientY - pullStartY.current; 
-                if (delta > 0) { 
-                    pullDeltaY.current = delta; 
-                    // Показываем индикатор только когда тянут вниз
-                    indicator.style.top = `${Math.min(delta/2 + 50, 120)}px`; 
-                }
-            };
-            
-            const handleTouchEnd = () => { 
-                if (!isPulling.current) return; 
-                
-                if (pullDeltaY.current > 70) { 
-                    indicator.style.top = '130px'; 
-                    handleRefresh(); 
-                    // После обновления скрываем индикатор
-                    setTimeout(() => { indicator.style.top = '-50px'; }, 1000); 
-                } else { 
-                    // Если не дотянули до порога - скрываем индикатор
-                    indicator.style.top = '-50px'; 
-                } 
-                
-                isPulling.current = false; 
-                pullDeltaY.current = 0; 
-            };
-            
-            window.addEventListener('touchstart', handleTouchStart);
-            window.addEventListener('touchmove', handleTouchMove);
-            window.addEventListener('touchend', handleTouchEnd);
-            
-            return () => { 
-                window.removeEventListener('touchstart', handleTouchStart);
-                window.removeEventListener('touchmove', handleTouchMove);
-                window.removeEventListener('touchend', handleTouchEnd);
-            };
+            window.addEventListener('touchstart', handleTouchStart); window.addEventListener('touchmove', handleTouchMove); window.addEventListener('touchend', handleTouchEnd);
+            return () => { window.removeEventListener('touchstart', handleTouchStart); window.removeEventListener('touchmove', handleTouchMove); window.removeEventListener('touchend', handleTouchEnd); };
         }, [handleRefresh]);
 
         useEffect(() => {
