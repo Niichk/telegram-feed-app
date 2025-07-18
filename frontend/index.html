@@ -46,25 +46,20 @@
             font-weight: 500;
             cursor: pointer;
             transition: all 0.2s ease;
+            /* Убираем синюю подсветку при тапе в некоторых браузерах */
+            -webkit-tap-highlight-color: transparent;
         }
 
-        /* Стиль для наведения курсора (для десктопа) */
+        /* Стиль для наведения курсора (оставляем для десктопа) */
         .header-button:hover {
             background-color: var(--tg-theme-button-color);
             color: var(--tg-theme-button-text-color);
         }
-
-        /* Стиль для момента нажатия/касания (делает кнопку синей только в момент касания) */
-        .header-button:active {
+        
+        /* ИСПРАВЛЕНО: Новый класс, который будет управляться через JS */
+        .header-button.button--active {
             background-color: var(--tg-theme-button-color);
             color: var(--tg-theme-button-text-color);
-        }
-
-        /* ИСПРАВЛЕНО: Возвращаем кнопке прозрачный фон, когда она остается в фокусе ПОСЛЕ нажатия. */
-        .header-button:focus {
-            background-color: transparent !important;
-            color: var(--tg-theme-button-color) !important;
-            outline: none; /* Убираем стандартную рамку фокуса */
         }
 
         .feed-container {
@@ -213,6 +208,9 @@
 
     // ИСПРАВЛЕНО: Компонент хедера теперь с правильной логикой "Вверх"
     function Header({ onRefresh, onScrollUp }) {
+        const handleTouchStart = (e) => e.currentTarget.classList.add('button--active');
+        const handleTouchEnd = (e) => e.currentTarget.classList.remove('button--active');
+        
         return (
             <header className="app-header">
                 <button onClick={(e) => onScrollUp(e)} className="header-button">Вверх ⬆️</button>
