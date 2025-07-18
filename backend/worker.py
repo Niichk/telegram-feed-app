@@ -82,15 +82,16 @@ async def upload_media_to_s3(message: types.Message, channel_id: int) -> dict | 
         # --- ИСПРАВЛЕННАЯ ЛОГИКА ---
         if media_type == 'photo':
             with Image.open(file_in_memory) as im:
-                im = im.convert("RGB")
+                im = im.convert("RGB") # Для WebP это не всегда нужно, но и не повредит
                 output_buffer = io.BytesIO()
-                im.save(output_buffer, format="JPEG", quality=85, optimize=True)
+                # Сохраняем в WebP вместо JPEG
+                im.save(output_buffer, format="WEBP", quality=80) # quality для WebP подбирается отдельно
                 output_buffer.seek(0)
                 file_in_memory = output_buffer
-            
-            file_extension = '.jpg'
-            content_type = 'image/jpeg'
-            logging.info("Изображение успешно сжато.")
+
+            file_extension = '.webp' # Меняем расширение
+            content_type = 'image/webp' # и MIME-тип
+            logging.info("Изображение успешно сжато в WebP.")
         else: # Используем else, чтобы этот блок не выполнялся для фото
             if (isinstance(message.media, types.MessageMediaDocument) and hasattr(message.media, 'document') and message.media.document and not isinstance(message.media.document, types.DocumentEmpty)):
                 attributes = getattr(message.media.document, 'attributes', [])
@@ -150,8 +151,10 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                 existing_album_post = existing_post_query.scalars().first()
                 
                 if existing_album_post:
+                    # Проверяем, что медиа есть и его еще нет в списке
                     if media_item and media_item not in existing_album_post.media:
-                        existing_album_post.media.append(media_item)
+                        updated_media = existing_album_post.media + [media_item]
+                        existing_album_post.media = updated_media
                         logging.info(f"Добавлен медиа к альбому {message.grouped_id}.")
                 else:
                     try:

@@ -153,6 +153,58 @@
             /* --- ИЗМЕНЕНО: Используем переменную темы --- */
             background-color: var(--tg-theme-secondary-bg-color);
         }
+
+        .post-media-gallery {
+            position: relative; /* Нужно для позиционирования кнопок */
+        }
+
+        .slider-item {
+            display: none; /* Скрываем все слайды по умолчанию */
+        }
+
+        .slider-item.active {
+            display: block; /* Показываем только активный */
+        }
+
+        .slider-button {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            background-color: rgba(0, 0, 0, 0.5);
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            font-size: 24px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 2;
+        }
+        .slider-button:hover {
+            background-color: rgba(0, 0, 0, 0.8);
+        }
+        .slider-button.prev {
+            left: 10px;
+        }
+        .slider-button.next {
+            right: 10px;
+        }
+
+        .slider-counter {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background-color: rgba(0, 0, 0, 0.6);
+            color: white;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 0.9em;
+            z-index: 2;
+        }
+
     </style>
 </head>
 <body>
@@ -195,25 +247,53 @@
     }
 
     function PostMedia({ media }) {
-        // Если медиа нет или это пустой массив, ничего не рендерим
         if (!media || media.length === 0) return null;
 
-        // Просто проходимся по массиву и рендерим каждый элемент
+        // Отфильтруем только визуальные медиа для слайдера
+        const visualMedia = media.filter(item => item.type === 'photo' || item.type === 'video');
+        // Аудиофайлы будем рендерить отдельно, после слайдера
+        const audioMedia = media.filter(item => item.type === 'audio');
+
+        const [currentIndex, setCurrentIndex] = useState(0);
+
+        if (visualMedia.length === 0 && audioMedia.length === 0) return null;
+
+        const goToPrevious = () => {
+            setCurrentIndex(prevIndex => (prevIndex === 0 ? visualMedia.length - 1 : prevIndex - 1));
+        };
+
+        const goToNext = () => {
+            setCurrentIndex(prevIndex => (prevIndex === visualMedia.length - 1 ? 0 : prevIndex + 1));
+        };
+
         return (
-            <div className="post-media-gallery">
-                {media.map((item, index) => {
-                    if (item.type === 'photo') {
-                        return <img key={index} src={item.url} className="post-media-visual" alt={`Изображение ${index + 1}`} />;
-                    }
-                    if (item.type === 'video') {
-                        return <video key={index} controls muted playsInline className="post-media-visual"><source src={item.url} /></video>;
-                    }
-                    if (item.type === 'audio') {
-                        return <audio key={index} controls className="post-media-audio"><source src={item.url} /></audio>;
-                    }
-                    return null;
-                })}
-            </div>
+            <>
+                {visualMedia.length > 0 && (
+                    <div className="post-media-gallery">
+                        {/* Рендерим все слайды, но показываем только активный через CSS */}
+                        {visualMedia.map((item, index) => (
+                            <div key={index} className={`slider-item ${index === currentIndex ? 'active' : ''}`}>
+                                {item.type === 'photo' && <img src={item.url} className="post-media-visual" alt={`Изображение ${index + 1}`} />}
+                                {item.type === 'video' && <video controls muted playsInline className="post-media-visual"><source src={item.url} /></video>}
+                            </div>
+                        ))}
+
+                        {/* Кнопки и счетчик показываем только если слайдов больше одного */}
+                        {visualMedia.length > 1 && (
+                            <>
+                                <button onClick={goToPrevious} className="slider-button prev">&lt;</button>
+                                <button onClick={goToNext} className="slider-button next">&gt;</button>
+                                <div className="slider-counter">{`${currentIndex + 1} / ${visualMedia.length}`}</div>
+                            </>
+                        )}
+                    </div>
+                )}
+
+                {/* Рендерим аудиофайлы под галереей */}
+                {audioMedia.map((item, index) => (
+                    <audio key={index} controls className="post-media-audio"><source src={item.url} /></audio>
+                ))}
+            </>
         );
     }
 
