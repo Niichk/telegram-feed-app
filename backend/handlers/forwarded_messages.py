@@ -2,7 +2,7 @@ from aiogram import Router, types, F
 from sqlalchemy.ext.asyncio import AsyncSession
 from database.requests import add_subscription
 from worker import fetch_posts_for_channel, upload_avatar_to_s3, client 
-from telethon.tl.types import InputPeerChannel 
+import logging
 
 router = Router()
 
@@ -23,8 +23,7 @@ async def handle_forwarded_message(message: types.Message, session: AsyncSession
     user = message.from_user
     channel_forward = message.forward_from_chat
 
-    # --- ИЗМЕНЕНО: Логика вызова ---
-    # 1. Вызываем функцию добавления подписки
+    # Вызываем функцию добавления подписки
     response_message, new_channel_obj = await add_subscription(
         session=session,
         user_id=user.id,
@@ -35,29 +34,39 @@ async def handle_forwarded_message(message: types.Message, session: AsyncSession
         channel_un=channel_forward.username or ""
     )
     
-    # 2. Отправляем пользователю предварительный ответ
     await message.answer(response_message)
 
-    # 3. Если был создан НОВЫЙ канал (а не найдена старая подписка),
-    #    то запускаем для него сбор постов.
+    # Если был создан НОВЫЙ канал, запускаем сбор
     if new_channel_obj:
-        # Убедимся, что клиент Telethon подключен, прежде чем его использовать
-        if not client.is_connected():
-            await client.connect()
-        
-        # 1. Получаем entity канала через Telethon
-        channel_entity = await client.get_entity(new_channel_obj.id)
-        
-        # 2. Скачиваем и загружаем аватар, получаем URL
-        avatar_url = await upload_avatar_to_s3(channel_entity)
-        
-        # 3. Сохраняем URL в наш объект и в базу данных
-        if avatar_url:
-            new_channel_obj.avatar_url = avatar_url
-            session.add(new_channel_obj)
-            await session.commit()
+        try:
+            if not client.is_connected():
+                await client.connect()
+            
+            # ИСПРАВЛЕНИЕ: Получаем Telethon entity через username или ID
+            telethon_entity = None
+            if channel_forward.username:
+                # Если есть username, используем его
+                telethon_entity = await client.get_entity(channel_forward.username)
+            else:
+                # Если нет username, пробуем получить через ID
+                try:
+                    telethon_entity = await client.get_entity(channel_forward.id)
+                except ValueError:
+                    logging.warning(f"Не удалось получить entity для канала {channel_forward.id}, пропускаем аватар")
+            
+            # Загружаем аватар если получили entity
+            if telethon_entity:
+                avatar_url = await upload_avatar_to_s3(telethon_entity)
+                if avatar_url:
+                    new_channel_obj.avatar_url = avatar_url
+                    session.add(new_channel_obj)
+                    await session.commit()
 
-        # Вызываем функцию сбора постов для свежедобавленного канала
-        await fetch_posts_for_channel(channel=new_channel_obj, db_session=session, post_limit=20) # Можно поставить лимит побольше для первого раза
-        
-        await message.answer(f"👍 Готово! Последние посты из «{new_channel_obj.title}» добавлены в вашу ленту.")
+            # Вызываем функцию сбора постов
+            await fetch_posts_for_channel(channel=new_channel_obj, db_session=session, post_limit=20)
+            
+            await message.answer(f"👍 Готово! Последние посты из «{new_channel_obj.title}» добавлены в вашу ленту.")
+            
+        except Exception as e:
+            logging.error(f"Ошибка при обработке нового канала {new_channel_obj.title}: {e}")
+            await message.answer(f"Канал добавлен, но возникла ошибка при загрузке постов. Попробуйте позже.")
