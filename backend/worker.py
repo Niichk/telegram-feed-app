@@ -3,6 +3,7 @@ import logging
 import os
 import boto3
 import io
+import time
 from dotenv import load_dotenv
 from telethon import TelegramClient, types
 from telethon.tl.types import InputPeerChannel
@@ -61,6 +62,52 @@ md = MarkdownIt(
     options_update={'linkify': True}
 )
 
+# Кэш для entity и статистика
+entity_cache = {}
+worker_stats = {
+    'start_time': time.time(),
+    'processed_channels': 0,
+    'processed_posts': 0,
+    'errors': 0
+}
+
+async def get_cached_entity(channel: Channel):
+    """Получает entity с кэшированием"""
+    cache_key = channel.username or str(channel.id)
+    
+    if cache_key in entity_cache:
+        return entity_cache[cache_key]
+    
+    try:
+        if channel.username:
+            entity = await client.get_entity(channel.username)
+        else:
+            entity = await client.get_entity(channel.id)
+            
+        if isinstance(entity, list):
+            entity = entity[0]
+            
+        entity_cache[cache_key] = entity
+        return entity
+        
+    except ValueError as e:
+        logging.warning(f"Не удалось получить entity для канала {channel.title}: {e}")
+        return None
+    except Exception as e:
+        logging.error(f"Неожиданная ошибка при получении entity для канала {channel.title}: {e}")
+        return None
+
+async def log_worker_stats():
+    """Логирует статистику работы воркера"""
+    uptime = time.time() - worker_stats['start_time']
+    logging.info(
+        f"Статистика воркера: "
+        f"Uptime: {uptime/3600:.1f}ч, "
+        f"Каналов: {worker_stats['processed_channels']}, "
+        f"Постов: {worker_stats['processed_posts']}, "
+        f"Ошибок: {worker_stats['errors']}"
+    )
+
 async def upload_media_to_s3(message: types.Message, channel_id: int) -> dict | None:
     """Загружает медиафайл в S3 и возвращает словарь с его данными."""
     media_type = None
@@ -114,6 +161,7 @@ async def upload_media_to_s3(message: types.Message, channel_id: int) -> dict | 
 
     except Exception as e:
         logging.error(f"Ошибка загрузки медиа из поста {message.id}: {e}")
+        worker_stats['errors'] += 1
         return None
     
 async def upload_avatar_to_s3(channel_entity) -> str | None:
@@ -147,8 +195,54 @@ async def upload_avatar_to_s3(channel_entity) -> str | None:
 
     except Exception as e:
         logging.error(f"Не удалось загрузить аватар для канала «{channel_entity.title}»: {e}")
+        worker_stats['errors'] += 1
         return None
 
+async def process_grouped_messages(grouped_messages, channel_id_for_log, db_session):
+    """Обрабатывает группу сообщений (альбом) как один пост"""
+    if not grouped_messages:
+        return None
+        
+    # Берем первое сообщение как основу
+    main_message = grouped_messages[0]
+    
+    # Собираем все медиафайлы из группы
+    media_items = []
+    for msg in grouped_messages:
+        media_item = await upload_media_to_s3(msg, channel_id_for_log)
+        if media_item:
+            media_items.append(media_item)
+    
+    # Собираем реакции и другие данные
+    reactions_data = []
+    if main_message.reactions and main_message.reactions.results:
+        for r in main_message.reactions.results:
+            if r.count > 0:
+                if hasattr(r.reaction, 'emoticon') and r.reaction.emoticon:
+                    reactions_data.append({"emoticon": r.reaction.emoticon, "count": r.count})
+                elif hasattr(r.reaction, 'document_id'):
+                    reactions_data.append({"document_id": r.reaction.document_id, "count": r.count})
+    
+    forward_data = None
+    if main_message.fwd_from and hasattr(main_message.fwd_from, 'from_name') and main_message.fwd_from.from_name:
+        forward_data = {"from_name": main_message.fwd_from.from_name}
+    
+    # Создаем один пост с несколькими медиафайлами
+    html_text = md.render(main_message.text) if main_message.text else None
+    
+    new_post = Post(
+        channel_id=channel_id_for_log,
+        message_id=main_message.id,
+        date=main_message.date,
+        text=html_text,
+        grouped_id=main_message.grouped_id,
+        media=media_items,
+        views=getattr(main_message, 'views', 0) or 0,
+        reactions=reactions_data,
+        forwarded_from=forward_data
+    )
+    
+    return new_post
 
 async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, post_limit: int = 10, offset_id: int = 0):
     channel_id_for_log = channel.id
@@ -156,104 +250,127 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
 
     try:
         logging.info(f"Начинаю сбор постов для канала «{channel_title_for_log}»...")
-        entity = await client.get_entity(channel.username or channel_id_for_log)
-        # Ensure entity is not a list
-        if isinstance(entity, list):
-            entity = entity[0]
+        
+        # Используем кэшированное получение entity
+        entity = await get_cached_entity(channel)
+        if not entity:
+            logging.warning(f"Не удалось получить entity для канала «{channel_title_for_log}». Пропускаю.")
+            return
+        
+        # Батчевая обработка постов
+        new_posts = []
+        updated_posts = []
+        grouped_messages = {}
         
         async for message in client.iter_messages(entity, limit=post_limit, offset_id=offset_id):
             if not message or (not message.text and not message.media and not message.poll):
                 continue
 
-            # --- ИСПРАВЛЕНИЯ ---
-            # 1. Ищем существующий пост в БД
+            # Обработка групповых сообщений (альбомов)
+            if message.grouped_id:
+                if message.grouped_id not in grouped_messages:
+                    grouped_messages[message.grouped_id] = []
+                grouped_messages[message.grouped_id].append(message)
+                continue
+            
+            # Проверяем существование поста
             existing_post_query = await db_session.execute(
                 select(Post).where(Post.channel_id == channel_id_for_log, Post.message_id == message.id)
             )
             existing_post = existing_post_query.scalars().first()
-
-            # 2. ИСПРАВЛЕНО: Улучшенная обработка реакций
+            
+            # Собираем данные поста
             reactions_data = []
             if message.reactions and message.reactions.results:
                 for r in message.reactions.results:
                     if r.count > 0:
-                        # Проверяем разные типы реакций
                         if hasattr(r.reaction, 'emoticon') and r.reaction.emoticon:
                             reactions_data.append({"emoticon": r.reaction.emoticon, "count": r.count})
                         elif hasattr(r.reaction, 'document_id'):
-                            # Для кастомных эмодзи
                             reactions_data.append({"document_id": r.reaction.document_id, "count": r.count})
             
             forward_data = None
             if message.fwd_from and hasattr(message.fwd_from, 'from_name') and message.fwd_from.from_name:
                 forward_data = {"from_name": message.fwd_from.from_name}
 
-            # 3. ИСПРАВЛЕНО: Безопасное получение просмотров
             views_count = getattr(message, 'views', 0) or 0
             
-            # 4. Если пост уже есть, обновляем его и идем дальше
             if existing_post:
+                # Обновляем существующий пост
                 existing_post.views = views_count
                 existing_post.reactions = reactions_data
-                existing_post.forwarded_from = forward_data if forward_data is not None else {}
-                # Если у поста обновился текст (например, было редактирование), тоже обновим
+                existing_post.forwarded_from = forward_data # type: ignore
                 if message.text:
                     existing_post.text = md.render(message.text)
-                logging.info(f"Обновлен пост {message.id} из «{channel_title_for_log}» (Просмотры: {views_count}, Реакции: {len(reactions_data)})")
-                await db_session.commit()  # ДОБАВЛЕНО: коммит для обновлений
-                continue # Переходим к следующему сообщению в цикле
-
-            # 5. Если поста нет, создаем новый (старая логика)
-            media_item = await upload_media_to_s3(message, channel_id_for_log)
-            html_text = md.render(message.text) if message.text else None
-
-            # Логика для альбомов остается почти без изменений
-            if message.grouped_id:
-                existing_album_post_query = await db_session.execute(
-                    select(Post).where(Post.grouped_id == message.grouped_id)
-                )
-                existing_album_post = existing_album_post_query.scalars().first()
-                
-                if existing_album_post:
-                    # Обновляем просмотры и реакции для главного поста альбома
-                    existing_album_post.views = views_count
-                    existing_album_post.reactions = reactions_data
-                    existing_album_post.forwarded_from = forward_data if forward_data is not None else {}
-                    
-                    # Добавляем новое медиа, если его еще нет
-                    if media_item and media_item not in existing_album_post.media:
-                        existing_album_post.media = existing_album_post.media + [media_item]
-                        logging.info(f"Добавлен медиа к альбому {message.grouped_id}.")
-                    
-                    logging.info(f"Обновлены данные для альбома {message.grouped_id} (Просмотры: {views_count}, Реакции: {len(reactions_data)}).")
-                    await db_session.commit()  # ДОБАВЛЕНО: коммит для альбомов
-                else:
-                    new_post = Post(
-                        channel_id=channel_id_for_log, message_id=message.id, date=message.date,
-                        text=html_text, grouped_id=message.grouped_id,
-                        media=[media_item] if media_item else [],
-                        views=views_count, reactions=reactions_data,
-                        forwarded_from=forward_data  # ИСПРАВЛЕНО: используем переменную
-                    )
-                    db_session.add(new_post)
-                    await db_session.commit()
-                    logging.info(f"Создан новый пост-альбом {message.id} из «{channel_title_for_log}» (Просмотры: {views_count}, Реакции: {len(reactions_data)})")
+                updated_posts.append(existing_post)
             else:
-                # Создание одиночного поста
+                # Создаем новый пост
+                media_item = await upload_media_to_s3(message, channel_id_for_log)
+                html_text = md.render(message.text) if message.text else None
+                
                 new_post = Post(
-                    channel_id=channel_id_for_log, message_id=message.id, date=message.date,
-                    text=html_text, media=[media_item] if media_item else [],
-                    views=views_count, reactions=reactions_data,
-                    forwarded_from=forward_data  # ИСПРАВЛЕНО: используем переменную
+                    channel_id=channel_id_for_log, 
+                    message_id=message.id, 
+                    date=message.date,
+                    text=html_text, 
+                    grouped_id=message.grouped_id,
+                    media=[media_item] if media_item else [],
+                    views=views_count, 
+                    reactions=reactions_data,
+                    forwarded_from=forward_data
                 )
-                db_session.add(new_post)
-                await db_session.commit()
-                logging.info(f"Создан новый пост {message.id} из «{channel_title_for_log}» (Просмотры: {views_count}, Реакции: {len(reactions_data)})")
+                new_posts.append(new_post)
+        
+        # Обрабатываем групповые сообщения
+        for group_id, messages in grouped_messages.items():
+            # Проверяем, существует ли уже пост для этой группы
+            existing_group_post_query = await db_session.execute(
+                select(Post).where(Post.grouped_id == group_id)
+            )
+            existing_group_post = existing_group_post_query.scalars().first()
+            
+            if not existing_group_post:
+                group_post = await process_grouped_messages(messages, channel_id_for_log, db_session)
+                if group_post:
+                    new_posts.append(group_post)
+            else:
+                # Обновляем существующий групповой пост
+                main_message = messages[0]
+                existing_group_post.views = getattr(main_message, 'views', 0) or 0
+                # Здесь можно добавить логику обновления медиа, если нужно
+                updated_posts.append(existing_group_post)
+        
+        # Один commit для всех изменений
+        try:
+            if new_posts:
+                db_session.add_all(new_posts)
+            
+            await db_session.commit()
+            
+            posts_created = len(new_posts)
+            posts_updated = len(updated_posts)
+            
+            if posts_created > 0:
+                logging.info(f"Создано {posts_created} новых постов для канала «{channel_title_for_log}»")
+                worker_stats['processed_posts'] += posts_created
+            if posts_updated > 0:
+                logging.info(f"Обновлено {posts_updated} постов для канала «{channel_title_for_log}»")
+            
+            worker_stats['processed_channels'] += 1
+                
+        except IntegrityError as e:
+            logging.error(f"Ошибка целостности данных для канала {channel_title_for_log}: {e}")
+            await db_session.rollback()
+            worker_stats['errors'] += 1
+        except Exception as e:
+            logging.error(f"Ошибка сохранения постов для канала {channel_title_for_log}: {e}")
+            await db_session.rollback()
+            worker_stats['errors'] += 1
 
     except Exception as e:
         logging.error(f"Критическая ошибка при обработке канала «{channel_title_for_log}» (ID: {channel_id_for_log}): {e}")
         await db_session.rollback()
-
+        worker_stats['errors'] += 1
 
 async def backfill_user_channels(user_id: int):
     """
@@ -261,9 +378,6 @@ async def backfill_user_channels(user_id: int):
     и запускает для них дозагрузку еще более старых постов.
     """
     logging.info(f"Начинаю дозагрузку старых постов для пользователя {user_id}...")
-
-    # --- ИЗМЕНЕНИЕ ЗДЕСЬ: УБИРАЕМ ЛИШНИЙ `async with client:` ---
-    # Клиент уже подключен в функции `main`, просто используем его.
     
     async with session_maker() as db_session:
         from database.requests import get_user_subscriptions
@@ -285,16 +399,21 @@ async def backfill_user_channels(user_id: int):
 
             if oldest_post:
                 logging.info(f"Самый старый пост для канала «{channel.title}» имеет ID {oldest_post.message_id}. Ищем посты старше...")
-                # Эта функция использует уже подключенный глобальный клиент
                 await fetch_posts_for_channel(
                     channel=channel, 
                     db_session=db_session, 
                     post_limit=20,
                     offset_id=oldest_post.message_id
                 )
+            else:
+                # Если постов нет, загружаем первые посты
+                await fetch_posts_for_channel(
+                    channel=channel, 
+                    db_session=db_session, 
+                    post_limit=20
+                )
     
     logging.info(f"Дозагрузка для пользователя {user_id} завершена.")
-
 
 async def periodic_task():
     """
@@ -310,8 +429,10 @@ async def periodic_task():
             return
 
         for channel in channels:
-            # Вызываем новую функцию для каждого канала
             await fetch_posts_for_channel(channel, db_session, post_limit=POST_LIMIT)
+    
+    # Логируем статистику
+    await log_worker_stats()
 
 async def process_backfill_requests():
     """
@@ -319,7 +440,6 @@ async def process_backfill_requests():
     """
     logging.info("Проверяю наличие заявок на дозагрузку...")
     async with session_maker() as db_session:
-        # Находим все существующие заявки
         result = await db_session.execute(select(BackfillRequest))
         requests = result.scalars().all()
 
@@ -329,34 +449,54 @@ async def process_backfill_requests():
 
         for req in requests:
             logging.info(f"Найдена заявка для пользователя {req.user_id}. Начинаю обработку.")
-            # Для каждой заявки вызываем нашу старую добрую функцию дозагрузки
-            await backfill_user_channels(req.user_id)
-            
-            # После успешной обработки удаляем заявку
-            await db_session.delete(req)
-        
-        await db_session.commit()
-        logging.info("Все заявки обработаны.")
-
+            try:
+                await backfill_user_channels(req.user_id)
+                # После успешной обработки удаляем заявку
+                await db_session.delete(req)
+                await db_session.commit()
+                logging.info(f"Заявка для пользователя {req.user_id} обработана и удалена.")
+            except Exception as e:
+                logging.error(f"Ошибка обработки заявки для пользователя {req.user_id}: {e}")
+                await db_session.rollback()
+                worker_stats['errors'] += 1
 
 async def main():
     await create_db()
     logging.info("Worker: Database tables checked/created.")
 
-    async with client:
-        logging.info("Клиент Telethon запущен.")
-        # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
-        # Теперь воркер будет выполнять ДВЕ задачи одновременно:
-        # 1. Регулярно собирать новые посты (periodic_task)
-        # 2. Регулярно проверять и обрабатывать заявки на дозагрузку (process_backfill_requests)
-        while True:
-            await asyncio.gather(
-                periodic_task(),
-                process_backfill_requests()
-            )
-            logging.info(f"Все задачи выполнены. Засыпаю на {SLEEP_TIME / 60:.1f} минут...")
-            await asyncio.sleep(SLEEP_TIME)
-
+    max_retries = 3
+    retry_count = 0
+    
+    while retry_count < max_retries:
+        try:
+            async with client:
+                logging.info("Клиент Telethon запущен.")
+                
+                while True:
+                    try:
+                        await asyncio.gather(
+                            periodic_task(),
+                            process_backfill_requests()
+                        )
+                        logging.info(f"Все задачи выполнены. Засыпаю на {SLEEP_TIME / 60:.1f} минут...")
+                        await asyncio.sleep(SLEEP_TIME)
+                        
+                    except Exception as e:
+                        logging.error(f"Ошибка в основном цикле: {e}")
+                        worker_stats['errors'] += 1
+                        # Короткий перерыв перед следующей попыткой
+                        await asyncio.sleep(10)
+                        
+        except Exception as e:
+            retry_count += 1
+            logging.error(f"Критическая ошибка клиента Telethon (попытка {retry_count}/{max_retries}): {e}")
+            worker_stats['errors'] += 1
+            
+            if retry_count < max_retries:
+                await asyncio.sleep(30)  # Ждем перед переподключением
+            else:
+                logging.error("Превышено максимальное количество попыток переподключения")
+                raise
 
 if __name__ == "__main__":
     asyncio.run(main())
