@@ -18,6 +18,7 @@ function PostCard({ post }) {
 
     return (
         <div className={`post-card ${hasVisualMedia ? 'post-card-with-media' : ''}`}>
+            {/* Header остается без изменений */}
             <div className="post-header">
                 <a href={channelUrl} target="_blank" rel="noopener noreferrer" className="channel-link">
                     <div className="channel-avatar">
@@ -42,6 +43,22 @@ function PostCard({ post }) {
                     <a href={postUrl} target="_blank" rel="noopener noreferrer" className="comment-button">Комментировать</a>
                 </div>
             )}
+
+            {/* --- НАЧАЛО ИЗМЕНЕНИЙ --- */}
+            <div className="post-footer">
+                <div className="reactions">
+                    {post.reactions?.map(reaction => (
+                        <span key={reaction.emoticon} className="reaction-item">
+                            {reaction.emoticon}
+                            <span className="reaction-count">{reaction.count}</span>
+                        </span>
+                    ))}
+                </div>
+                <div className="views">
+                    {post.views && `👁️ ${post.views}`}
+                </div>
+            </div>
+            {/* --- КОНЕЦ ИЗМЕНЕНИЙ --- */}
         </div>
     );
 }

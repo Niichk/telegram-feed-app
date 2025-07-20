@@ -54,10 +54,10 @@ class Post(Base):
     date: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     grouped_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=True, index=True)
     media: Mapped[list[dict]] = mapped_column(JSON, nullable=True)
-    
+    views: Mapped[int] = mapped_column(BigInteger, nullable=True)
+    reactions: Mapped[list[dict]] = mapped_column(JSON, nullable=True)
     channel: Mapped["Channel"] = relationship(back_populates="posts")
 
-    # 2. ДОБАВЬ ЭТОТ БЛОК В КОНЕЦ КЛАССА
     # Он создает правило уникальности для пары "канал-сообщение"
     __table_args__ = (
         UniqueConstraint('channel_id', 'message_id', name='_channel_message_uc'),

@@ -294,3 +294,35 @@ body {
             background-color: rgba(0, 0, 0, 0.6); color: white; padding: 4px 8px;
             border-radius: 12px; font-size: 0.9em; z-index: 2;
         }
+
+        .post-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 16px;
+            border-top: 1px solid var(--tg-theme-hint-color);
+            font-size: 0.9em;
+            color: var(--tg-theme-hint-color);
+        }
+
+        .reactions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .reaction-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            background-color: var(--tg-theme-bg-color);
+            padding: 2px 6px;
+            border-radius: 10px;
+        }
+
+        .reaction-count {
+            font-weight: 500;
+        }
+
+        .views {
+            font-weight: 500;
+        }

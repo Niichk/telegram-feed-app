@@ -150,75 +150,84 @@ async def upload_avatar_to_s3(channel_entity) -> str | None:
 
 
 async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, post_limit: int = 10, offset_id: int = 0):
-    # Запоминаем ID и название канала до начала всех операций
     channel_id_for_log = channel.id
     channel_title_for_log = channel.title
 
     try:
         logging.info(f"Начинаю сбор постов для канала «{channel_title_for_log}»...")
         entity = await client.get_entity(channel.username or channel_id_for_log)
-        if isinstance(entity, list):
-            if len(entity) == 0:
-                logging.warning(f"Не удалось получить entity для канала {channel_id_for_log}")
-                return
-            entity = entity[0]
-
-        existing_post_ids = set((await db_session.execute(
-            select(Post.message_id).where(Post.channel_id == channel_id_for_log).order_by(Post.date.desc()).limit(50)
-        )).scalars().all())
-
+        
         async for message in client.iter_messages(entity, limit=post_limit, offset_id=offset_id):
-            if not message or (not message.text and not message.media):
+            if not message or (not message.text and not message.media and not message.poll):
                 continue
             
-            if not message.grouped_id and message.id in existing_post_ids:
-                logging.info(f"Достигнут уже сохраненный пост {message.id} в «{channel_title_for_log}». Завершаю сбор.")
-                break
+            # --- НАЧАЛО ИЗМЕНЕНИЙ ---
+            # 1. Ищем существующий пост в БД
+            existing_post_query = await db_session.execute(
+                select(Post).where(Post.channel_id == channel_id_for_log, Post.message_id == message.id)
+            )
+            existing_post = existing_post_query.scalars().first()
+
+            # 2. Готовим данные по реакциям
+            reactions_data = []
+            if message.reactions:
+                reactions_data = [{"emoticon": r.emoticon, "count": r.count} for r in message.reactions.results if r.count > 0]
             
+            # 3. Если пост уже есть, обновляем его и идем дальше
+            if existing_post:
+                existing_post.views = message.views
+                existing_post.reactions = reactions_data
+                # Если у поста обновился текст (например, было редактирование), тоже обновим
+                if message.text:
+                    existing_post.text = md.render(message.text)
+                logging.info(f"Обновлен пост {message.id} из «{channel_title_for_log}» (Просмотры: {message.views})")
+                continue # Переходим к следующему сообщению в цикле
+
+            # 4. Если поста нет, создаем новый (старая логика)
             media_item = await upload_media_to_s3(message, channel_id_for_log)
             html_text = md.render(message.text) if message.text else None
 
+            # Логика для альбомов остается почти без изменений
             if message.grouped_id:
-                existing_post_query = await db_session.execute(
+                # ... (существующая логика обработки альбомов, но с добавлением views/reactions)
+                existing_album_post_query = await db_session.execute(
                     select(Post).where(Post.grouped_id == message.grouped_id)
                 )
-                existing_album_post = existing_post_query.scalars().first()
+                existing_album_post = existing_album_post_query.scalars().first()
                 
                 if existing_album_post:
-                    # Проверяем, что медиа есть и его еще нет в списке
+                    # --- НАЧАЛО ИСПРАВЛЕНИЙ ---
+                    # Обновляем просмотры и реакции для главного поста альбома
+                    existing_album_post.views = message.views
+                    existing_album_post.reactions = reactions_data
+                    
+                    # Добавляем новое медиа, если его еще нет
                     if media_item and media_item not in existing_album_post.media:
-                        updated_media = existing_album_post.media + [media_item]
-                        existing_album_post.media = updated_media
+                        existing_album_post.media = existing_album_post.media + [media_item]
                         logging.info(f"Добавлен медиа к альбому {message.grouped_id}.")
+                    
+                    logging.info(f"Обновлены данные для альбома {message.grouped_id}.")
+                    # --- КОНЕЦ ИСПРАВЛЕНИЙ ---
                 else:
-                    try:
-                        new_post = Post(
-                            channel_id=channel_id_for_log, message_id=message.id, date=message.date,
-                            text=html_text, grouped_id=message.grouped_id,
-                            media=[media_item] if media_item else []
-                        )
-                        db_session.add(new_post)
-                        await db_session.commit()
-                        logging.info(f"Создан новый пост для альбома {message.grouped_id}.")
-                    except IntegrityError:
-                        await db_session.rollback()
-                        logging.warning(f"Конфликт при создании поста для альбома {message.grouped_id}.")
-            
-            else:
-                try:
                     new_post = Post(
                         channel_id=channel_id_for_log, message_id=message.id, date=message.date,
-                        text=html_text, media=[media_item] if media_item else []
+                        text=html_text, grouped_id=message.grouped_id,
+                        media=[media_item] if media_item else [],
+                        views=message.views, reactions=reactions_data
                     )
                     db_session.add(new_post)
-                    await db_session.commit()
-                    logging.info(f"Сохранен одиночный пост {message.id} из «{channel_title_for_log}»")
-                except IntegrityError:
-                    await db_session.rollback()
-                    logging.warning(f"Пост {message.id} уже существует, пропуск.")
-                except Exception as e:
-                    await db_session.rollback()
-                    logging.error(f"Не удалось сохранить пост {message.id}: {e}")
+            else:
+                # Создание одиночного поста
+                new_post = Post(
+                    channel_id=channel_id_for_log, message_id=message.id, date=message.date,
+                    text=html_text, media=[media_item] if media_item else [],
+                    views=message.views, reactions=reactions_data
+                )
+                db_session.add(new_post)
+            
+            await db_session.commit()
+            logging.info(f"Сохранен новый пост {message.id} из «{channel_title_for_log}»")
+            # --- КОНЕЦ ИЗМЕНЕНИЙ ---
 
         await db_session.commit()
 

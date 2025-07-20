@@ -1,14 +1,20 @@
 from pydantic import BaseModel, ConfigDict
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
 
-# --- НОВАЯ СХЕМА для одного медиа-элемента ---
+class ReactionItem(BaseModel):
+    emoticon: str
+    count: int
+
+
 class MediaItem(BaseModel):
     type: str
     url: str
 
+
 class ChannelInPost(BaseModel):
+
     id: int
     title: str
     username: str | None
@@ -22,6 +28,8 @@ class PostInFeed(BaseModel):
     date: datetime
     channel: ChannelInPost
     media: list[MediaItem] | None
+    views: Optional[int] = None
+    reactions: Optional[List[ReactionItem]] = None
 
 class FeedResponse(BaseModel):
     posts: List[PostInFeed]
