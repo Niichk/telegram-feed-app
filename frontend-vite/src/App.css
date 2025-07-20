@@ -135,10 +135,7 @@ body {
             color: var(--tg-theme-button-text-color);
         }
 
-        .header-info {
-            /* Можно добавить небольшой отступ, если нужно */
-            /* padding-right: 10px; */
-        }
+        /* .header-info removed: empty ruleset */
 
         .channel-title {
             font-weight: 600;

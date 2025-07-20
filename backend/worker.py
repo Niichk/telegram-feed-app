@@ -156,6 +156,9 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
     try:
         logging.info(f"Начинаю сбор постов для канала «{channel_title_for_log}»...")
         entity = await client.get_entity(channel.username or channel_id_for_log)
+        # Ensure entity is not a list
+        if isinstance(entity, list):
+            entity = entity[0]
         
         async for message in client.iter_messages(entity, limit=post_limit, offset_id=offset_id):
             if not message or (not message.text and not message.media and not message.poll):
