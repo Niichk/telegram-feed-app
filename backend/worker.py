@@ -231,7 +231,17 @@ async def process_grouped_messages(grouped_messages, channel_id_for_log, db_sess
                 source_entity = await client.get_entity(main_message.fwd_from.from_id)
                 from_name = getattr(source_entity, 'title', getattr(source_entity, 'first_name', 'Неизвестный источник'))
                 username = getattr(source_entity, 'username', None)
-                channel_id = getattr(source_entity, 'id', None)
+                
+                # ИСПРАВЛЕНИЕ: правильное преобразование channel_id
+                raw_channel_id = getattr(source_entity, 'id', None)
+                if raw_channel_id:
+                    if str(raw_channel_id).startswith('-100'):
+                        channel_id = str(raw_channel_id)[4:]  # Убираем "-100"
+                    else:
+                        channel_id = str(raw_channel_id)
+                else:
+                    channel_id = None
+                    
                 forward_data = {"from_name": from_name, "username": username, "channel_id": channel_id}
             elif hasattr(main_message.fwd_from, 'from_name') and main_message.fwd_from.from_name:
                 forward_data = {"from_name": main_message.fwd_from.from_name, "username": None, "channel_id": None}
@@ -310,7 +320,19 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                         source_entity = await client.get_entity(message.fwd_from.from_id)
                         from_name = getattr(source_entity, 'title', getattr(source_entity, 'first_name', 'Неизвестный источник'))
                         username = getattr(source_entity, 'username', None)
-                        channel_id = getattr(source_entity, 'id', None)
+                        
+                        # ИСПРАВЛЕНИЕ: правильное преобразование channel_id
+                        raw_channel_id = getattr(source_entity, 'id', None)
+                        if raw_channel_id:
+                            # Преобразуем ID канала в формат для ссылок
+                            if str(raw_channel_id).startswith('-100'):
+                                # Убираем префикс -100 для ссылок вида t.me/c/
+                                channel_id = str(raw_channel_id)[4:]  # Убираем "-100"
+                            else:
+                                channel_id = str(raw_channel_id)
+                        else:
+                            channel_id = None
+                            
                         forward_data = {"from_name": from_name, "username": username, "channel_id": channel_id}
                     # Если from_id нет, но есть from_name (для старых репостов)
                     elif hasattr(message.fwd_from, 'from_name') and message.fwd_from.from_name:
@@ -376,17 +398,27 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                 # ИСПРАВЛЕНИЕ: применяем ту же логику для групповых сообщений
                 forward_data = None
                 if main_message.fwd_from:
-                 try:
-                    if hasattr(main_message.fwd_from, 'from_id') and main_message.fwd_from.from_id:
-                        source_entity = await client.get_entity(main_message.fwd_from.from_id)
-                        from_name = getattr(source_entity, 'title', getattr(source_entity, 'first_name', 'Неизвестный источник'))
-                        username = getattr(source_entity, 'username', None)
-                        channel_id = getattr(source_entity, 'id', None)
-                        existing_group_post.forwarded_from = {"from_name": from_name, "username": username, "channel_id": channel_id}
-                    elif hasattr(main_message.fwd_from, 'from_name') and main_message.fwd_from.from_name:
-                        existing_group_post.forwarded_from = {"from_name": main_message.fwd_from.from_name, "username": None, "channel_id": None}
-                 except Exception:
-                    existing_group_post.forwarded_from = {"from_name": "Недоступный источник", "username": None, "channel_id": None} # type: ignore
+                    try:
+                        if hasattr(main_message.fwd_from, 'from_id') and main_message.fwd_from.from_id:
+                            source_entity = await client.get_entity(main_message.fwd_from.from_id)
+                            from_name = getattr(source_entity, 'title', getattr(source_entity, 'first_name', 'Неизвестный источник'))
+                            username = getattr(source_entity, 'username', None)
+                            
+                            # ИСПРАВЛЕНИЕ: правильное преобразование channel_id
+                            raw_channel_id = getattr(source_entity, 'id', None)
+                            if raw_channel_id:
+                                if str(raw_channel_id).startswith('-100'):
+                                    channel_id = str(raw_channel_id)[4:]  # Убираем "-100"
+                                else:
+                                    channel_id = str(raw_channel_id)
+                            else:
+                                channel_id = None
+                                
+                            existing_group_post.forwarded_from = {"from_name": from_name, "username": username, "channel_id": channel_id}
+                        elif hasattr(main_message.fwd_from, 'from_name') and main_message.fwd_from.from_name:
+                            existing_group_post.forwarded_from = {"from_name": main_message.fwd_from.from_name, "username": None, "channel_id": None}
+                    except Exception:
+                        existing_group_post.forwarded_from = {"from_name": "Недоступный источник", "username": None, "channel_id": None}
                 updated_posts.append(existing_group_post)
         
         # Один commit для всех изменений
