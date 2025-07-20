@@ -80,14 +80,55 @@ worker_stats = {
 }
 
 def process_text(text: str | None) -> str | None:
-    """Полный цикл обработки текста: markdown -> html -> sanitize."""
+    """Полный цикл обработки текста: markdown -> html -> sanitize -> linkify."""
     if not text:
         return None
-    # markdown-it с плагином linkify-it-py найдет и обернет ссылки в <a>
-    html = md.renderInline(text)
-    # Очищаем получившийся HTML для защиты от XSS
-    safe_html = bleach.clean(html, tags=ALLOWED_TAGS, attributes=ALLOWED_ATTRIBUTES)
-    return safe_html
+    
+    try:
+        # Сначала обрабатываем markdown
+        html = md.renderInline(text)
+        
+        # Затем принудительно обрабатываем ссылки через linkify
+        # linkify найдет все URL и обернет их в <a> теги
+        linkified_html = linkify.test(text)
+        if linkified_html:
+            # Если linkify нашел ссылки, используем его результат
+            import re
+            
+            # Простая regex для поиска URL
+            url_pattern = r'(https?://[^\s<>"]+|www\.[^\s<>"]+)'
+            
+            def replace_url(match):
+                url = match.group(1)
+                if not url.startswith(('http://', 'https://')):
+                    url = 'http://' + url
+                return f'<a href="{url}" target="_blank" rel="noopener noreferrer">{match.group(1)}</a>'
+            
+            html = re.sub(url_pattern, replace_url, html)
+        
+        # Очищаем получившийся HTML для защиты от XSS
+        safe_html = bleach.clean(
+            html, 
+            tags=ALLOWED_TAGS, 
+            attributes=ALLOWED_ATTRIBUTES,
+            strip=False  # Не удаляем теги, а экранируем
+        )
+        
+        return safe_html
+        
+    except Exception as e:
+        logging.error(f"Ошибка обработки текста: {e}")
+        # Fallback: простая обработка ссылок
+        import re
+        
+        url_pattern = r'(https?://[^\s<>"]+)'
+        
+        def replace_url(match):
+            url = match.group(1)
+            return f'<a href="{url}" target="_blank" rel="noopener noreferrer">{url}</a>'
+        
+        processed = re.sub(url_pattern, replace_url, text)
+        return bleach.clean(processed, tags=ALLOWED_TAGS, attributes=ALLOWED_ATTRIBUTES)
 
 async def get_cached_entity(channel: Channel):
     """Получает entity с кэшированием"""
