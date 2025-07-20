@@ -267,7 +267,6 @@ body {
             transform: translateX(-50%); border-radius: 50%;
             display: flex; align-items: center; justify-content: center;
             width: 40px; height: 40px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            /* ИСПРАВЛЕНО: z-index должен быть выше хедера */
             z-index: 99;
             transition: top 0.2s ease-out;
             background-color: var(--tg-theme-secondary-bg-color);

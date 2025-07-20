@@ -276,6 +276,14 @@ function App() {
     return (
         <>
             <Header onRefresh={handleRefresh} onScrollUp={scrollToTop} />
+            
+            {/* --- НАЧАЛО ИЗМЕНЕНИЙ --- */}
+            
+            {/* 1. Выносим индикатор обновления ИЗ контейнера ленты */}
+            <div id="refresh-indicator" className="pull-to-refresh-indicator">
+                <RadialLoader />
+            </div>
+
             <div className="feed-container">
                 {posts.map(post => <PostCard key={`${post.channel_id}-${post.message_id}`} post={post} />)}
                 
@@ -290,10 +298,9 @@ function App() {
                         Догружаем старые посты... ⏳<br/><small>Потяните, чтобы обновить.</small>
                     </div>
                 )}
-                
-                <div id="refresh-indicator" className="pull-to-refresh-indicator">
-                    <RadialLoader />
-                </div>
+
+                {/* Он больше не здесь */}
+                {/* <div id="refresh-indicator" ... > */}
 
                 <div ref={loader} />
             </div>
