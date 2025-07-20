@@ -1,0 +1,293 @@
+body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Liter', 'Inter', 'Arimo', sans-serif;
+            margin: 0;
+            padding: 72px 12px 12px;
+            overscroll-behavior-y: contain;
+            background-color: var(--tg-theme-bg-color, #f0f2f5); /* Если переменной нет, фон будет светло-серым */
+            color: var(--tg-theme-text-color);
+        }
+
+        /* --- Стили хедера --- */
+        .app-header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            background-color: var(--tg-theme-secondary-bg-color);
+            padding: 8px 12px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            z-index: 100;
+            border-bottom: 1px solid var(--tg-theme-hint-color);
+            transform: translateZ(0);
+        }
+
+        .header-button {
+            padding: 6px 12px;
+            border: 1px solid var(--tg-theme-button-color);
+            background-color: transparent;
+            color: var(--tg-theme-button-color);
+            border-radius: 8px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.15s ease-out, color 0.15s ease-out;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        /* Стиль для наведения курсора (для десктопа) */
+        .header-button:hover {
+            background-color: var(--tg-theme-button-color);
+            color: var(--tg-theme-button-text-color);
+        }
+        
+        /* Класс для активного состояния, управляемый JS */
+        .header-button.button--active {
+            background-color: var(--tg-theme-button-color);
+            color: var(--tg-theme-button-text-color);
+        }
+
+        .feed-container {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        /* --- Стили карточки поста --- */
+        .post-card {
+            border-radius: 8px;
+            margin-bottom: 12px;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+            background-color: #f7f9fa;
+            border: 1px solid var(--tg-theme-hint-color);
+            animation: fadeIn 0.5s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .post-content { 
+            padding: 16px; 
+        }
+
+        /* Убираем лишний верхний отступ у контента, если карточка содержит медиа */
+        .post-card-with-media .post-content {
+            padding-top: 12px;
+        }
+
+        /* Убираем верхний отступ у хедера, если карточка БЕЗ медиа, чтобы не было двойного отступа */
+        .post-card:not(.post-card-with-media) .post-header {
+            padding-bottom: 0;
+        }
+
+        .channel-link {
+            display: flex;
+            align-items: center;
+            gap: 12px; /* Отступ между аватаром и текстом */
+            text-decoration: none; /* Убираем подчеркивание */
+            color: inherit; /* Наследуем цвет текста от родителя */
+            flex-grow: 1; /* Позволяем ссылке занимать доступное пространство */
+        }
+
+
+        .post-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 16px;
+            gap: 0; /* Убираем gap отсюда, так как он теперь в .channel-link */
+        }
+
+        .channel-avatar, .avatar-placeholder {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            flex-shrink: 0; /* Запрещаем аватару сжиматься */
+        }
+
+        .channel-avatar img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            border-radius: 50%;
+        }
+
+        .avatar-placeholder {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            font-weight: 600;
+            background-color: var(--tg-theme-button-color);
+            color: var(--tg-theme-button-text-color);
+        }
+
+        .header-info {
+            /* Можно добавить небольшой отступ, если нужно */
+            /* padding-right: 10px; */
+        }
+
+        .channel-title {
+            font-weight: 600;
+            font-size: 1.1em;
+            color: inherit;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .post-date {
+            font-size: 0.9em;
+            color: var(--tg-theme-hint-color);
+            /* Убираем отступ слева, он больше не нужен */
+            margin-left: 0; 
+        }
+        .post-text { white-space: pre-wrap; line-height: 1.5; font-size: 1em; margin-bottom: 16px; }
+        .post-text a { color: var(--tg-theme-link-color); text-decoration: none; }
+        .post-text a:hover { text-decoration: underline; }
+        .post-media-visual { width: 100%; max-width: 100%; height: auto; max-height: 70vh; object-fit: cover; display: block; }
+        .post-media-audio { width: 100%; margin-top: 12px; }
+
+        /* --- Кнопка --- */
+        .comment-button {
+            display: inline-block; padding: 8px 16px; text-decoration: none;
+            border-radius: 6px; font-weight: 500; transition: background-color 0.2s;
+            border: none; background-color: var(--tg-theme-button-color);
+            color: var(--tg-theme-button-text-color);
+        }
+        
+        /* --- Статусы и лоадеры --- */
+        .status-message { text-align: center; padding: 40px; font-size: 1.2em; color: var(--tg-theme-hint-color); }
+
+        .loader-container { 
+            display: flex;
+            justify-content: center;
+            padding: 20px; 
+        }
+
+        .radial-loader {
+            color: official;
+            display: inline-block; /* Меняем на inline-block, чтобы можно было центрировать */
+            position: relative;
+            width: 80px;
+            height: 80px;
+        }
+
+            .radial-loader div {
+            transform-origin: 40px 40px; /* Центр вращения */
+            animation: radial-loader-animation 1.2s linear infinite;
+        }
+
+            /* Стили для "палочек" */
+            .radial-loader div:after {
+            content: " ";
+            display: block;
+            position: absolute;
+            top: 3px;
+            left: 37px;
+            width: 6px;
+            height: 18px;
+            border-radius: 20%;
+            /* Изменяем эту строку */
+            background: var(--tg-theme-button-color, #888); /* Если переменной нет, лоадер будет серым */
+        }
+
+            /* Поворачиваем каждую "палочку" на свое место */
+            .radial-loader div:nth-child(1) {
+            transform: rotate(0deg);
+            animation-delay: -1.1s;
+        }
+            .radial-loader div:nth-child(2) {
+            transform: rotate(30deg);
+            animation-delay: -1.0s;
+        }
+            .radial-loader div:nth-child(3) {
+            transform: rotate(60deg);
+            animation-delay: -0.9s;
+        }
+            .radial-loader div:nth-child(4) {
+            transform: rotate(90deg);
+            animation-delay: -0.8s;
+        }
+            .radial-loader div:nth-child(5) {
+            transform: rotate(120deg);
+            animation-delay: -0.7s;
+        }
+            .radial-loader div:nth-child(6) {
+            transform: rotate(150deg);
+            animation-delay: -0.6s;
+        }
+            .radial-loader div:nth-child(7) {
+            transform: rotate(180deg);
+            animation-delay: -0.5s;
+        }
+            .radial-loader div:nth-child(8) {
+            transform: rotate(210deg);
+            animation-delay: -0.4s;
+        }
+            .radial-loader div:nth-child(9) {
+            transform: rotate(240deg);
+            animation-delay: -0.3s;
+        }
+            .radial-loader div:nth-child(10) {
+            transform: rotate(270deg);
+            animation-delay: -0.2s;
+        }
+            .radial-loader div:nth-child(11) {
+            transform: rotate(300deg);
+            animation-delay: -0.1s;
+        }
+            .radial-loader div:nth-child(12) {
+            transform: rotate(330deg);
+            animation-delay: 0s;
+        }
+
+            /* Анимация затухания для каждой "палочки" */
+            @keyframes radial-loader-animation {
+            0% {
+                opacity: 1;
+            }
+            100% {
+                opacity: 0;
+            }
+        }
+
+        /* --- Стили для Pull-to-Refresh --- */
+        .pull-to-refresh-indicator {
+            position: absolute; top: -50px; left: 50%;
+            transform: translateX(-50%); border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            width: 40px; height: 40px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            /* ИСПРАВЛЕНО: z-index должен быть выше хедера */
+            z-index: 99;
+            transition: top 0.2s ease-out;
+            background-color: var(--tg-theme-secondary-bg-color);
+        }
+
+        /* --- Стили слайдера --- */
+        .post-media-gallery { position: relative; }
+        .slider-item { display: none; }
+        .slider-item.active { display: block; }
+        .slider-button {
+            position: absolute; top: 50%; transform: translateY(-50%);
+            background-color: rgba(0, 0, 0, 0.5); color: white; border: none;
+            border-radius: 50%; width: 40px; height: 40px; font-size: 24px;
+            cursor: pointer; display: flex; align-items: center; justify-content: center; z-index: 2;
+        }
+        .slider-button:hover { background-color: rgba(0, 0, 0, 0.8); }
+        .slider-button.prev { left: 10px; }
+        .slider-button.next { right: 10px; }
+        .slider-counter {
+            position: absolute; top: 10px; right: 10px;
+            background-color: rgba(0, 0, 0, 0.6); color: white; padding: 4px 8px;
+            border-radius: 12px; font-size: 0.9em; z-index: 2;
+        }
