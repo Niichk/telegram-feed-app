@@ -57,8 +57,7 @@ s3_client = boto3.client(
     aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
     region_name=S3_REGION
 )
-md = MarkdownIt()
-
+md = MarkdownIt().enable('linkify')
 
 async def upload_media_to_s3(message: types.Message, channel_id: int) -> dict | None:
     """Загружает медиафайл в S3 и возвращает словарь с его данными."""
