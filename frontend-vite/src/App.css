@@ -3,7 +3,7 @@ body {
             margin: 0;
             padding: 72px 12px 12px;
             overscroll-behavior-y: contain;
-            background-color: var(--tg-theme-bg-color, #f0f2f5); /* Если переменной нет, фон будет светло-серым */
+            background-color: #f0f4f8; /* Если переменной нет, фон будет светло-серым */
             color: var(--tg-theme-text-color);
         }
 
