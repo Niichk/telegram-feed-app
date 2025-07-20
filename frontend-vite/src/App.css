@@ -327,6 +327,8 @@ body {
         .forwarded-from-banner {
             padding: 8px 16px;
             font-size: 0.9em;
-            color: var(--tg-theme-hint-color);
+            color: var(--tg-theme-hint-color); /* Унаследовать цвет текста */
             border-bottom: 1px solid var(--tg-theme-hint-color);
+            display: block; /* Чтобы ссылка занимала всю ширину */
+            text-decoration: none; /* Убрать подчеркивание */
         }

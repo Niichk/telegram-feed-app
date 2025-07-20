@@ -29,9 +29,18 @@ const PostCard = React.memo(({ post }) => {
             </div>
 
             {post.forwarded_from && (
-                <div className="forwarded-from-banner">
-                    Переслано из <b>{post.forwarded_from.from_name}</b>
-                </div>
+                <a 
+                    href={
+                        post.forwarded_from.username 
+                        ? `https://t.me/${post.forwarded_from.username}` 
+                        : (post.forwarded_from.channel_id ? `https://t.me/c/${post.forwarded_from.channel_id}` : '#')
+                    }
+                    target="_blank" 
+                    rel="noopener noreferrer" 
+                    className="forwarded-from-banner"
+                >
+                    Переслано из <b>{post.forwarded_from.from_name || 'Неизвестный источник'}</b>
+                </a>
             )}
             
             {/* Блок с картинками/видео/аудио */}
