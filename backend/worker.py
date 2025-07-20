@@ -164,44 +164,53 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
             if not message or (not message.text and not message.media and not message.poll):
                 continue
             
-            # --- НАЧАЛО ИЗМЕНЕНИЙ ---
+            # --- ИСПРАВЛЕНИЯ ---
             # 1. Ищем существующий пост в БД
             existing_post_query = await db_session.execute(
                 select(Post).where(Post.channel_id == channel_id_for_log, Post.message_id == message.id)
             )
             existing_post = existing_post_query.scalars().first()
 
-            # 2. Готовим данные по реакциям
+            # 2. ИСПРАВЛЕНО: Улучшенная обработка реакций
             reactions_data = []
-            if message.reactions:
-                reactions_data = [{"emoticon": r.reaction.emoticon, "count": r.count} for r in message.reactions.results if r.count > 0]
+            if message.reactions and message.reactions.results:
+                for r in message.reactions.results:
+                    if r.count > 0:
+                        # Проверяем разные типы реакций
+                        if hasattr(r.reaction, 'emoticon') and r.reaction.emoticon:
+                            reactions_data.append({"emoticon": r.reaction.emoticon, "count": r.count})
+                        elif hasattr(r.reaction, 'document_id'):
+                            # Для кастомных эмодзи
+                            reactions_data.append({"document_id": r.reaction.document_id, "count": r.count})
             
-            # 3. Если пост уже есть, обновляем его и идем дальше
+            # 3. ИСПРАВЛЕНО: Безопасное получение просмотров
+            views_count = getattr(message, 'views', 0) or 0
+            
+            # 4. Если пост уже есть, обновляем его и идем дальше
             if existing_post:
-                existing_post.views = message.views
+                existing_post.views = views_count
                 existing_post.reactions = reactions_data
                 # Если у поста обновился текст (например, было редактирование), тоже обновим
                 if message.text:
                     existing_post.text = md.render(message.text)
-                logging.info(f"Обновлен пост {message.id} из «{channel_title_for_log}» (Просмотры: {message.views})")
+                logging.info(f"Обновлен пост {message.id} из «{channel_title_for_log}» (Просмотры: {views_count}, Реакции: {len(reactions_data)})")
+                await db_session.commit()  # ДОБАВЛЕНО: коммит для обновлений
                 continue # Переходим к следующему сообщению в цикле
 
-            # 4. Если поста нет, создаем новый (старая логика)
+            # 5. Если поста нет, создаем новый (старая логика)
             media_item = await upload_media_to_s3(message, channel_id_for_log)
             html_text = md.render(message.text) if message.text else None
 
             # Логика для альбомов остается почти без изменений
             if message.grouped_id:
-                # ... (существующая логика обработки альбомов, но с добавлением views/reactions)
                 existing_album_post_query = await db_session.execute(
                     select(Post).where(Post.grouped_id == message.grouped_id)
                 )
                 existing_album_post = existing_album_post_query.scalars().first()
                 
                 if existing_album_post:
-                    # --- НАЧАЛО ИСПРАВЛЕНИЙ ---
                     # Обновляем просмотры и реакции для главного поста альбома
-                    existing_album_post.views = message.views
+                    existing_album_post.views = views_count
                     existing_album_post.reactions = reactions_data
                     
                     # Добавляем новое медиа, если его еще нет
@@ -209,30 +218,28 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                         existing_album_post.media = existing_album_post.media + [media_item]
                         logging.info(f"Добавлен медиа к альбому {message.grouped_id}.")
                     
-                    logging.info(f"Обновлены данные для альбома {message.grouped_id}.")
-                    # --- КОНЕЦ ИСПРАВЛЕНИЙ ---
+                    logging.info(f"Обновлены данные для альбома {message.grouped_id} (Просмотры: {views_count}, Реакции: {len(reactions_data)}).")
+                    await db_session.commit()  # ДОБАВЛЕНО: коммит для альбомов
                 else:
                     new_post = Post(
                         channel_id=channel_id_for_log, message_id=message.id, date=message.date,
                         text=html_text, grouped_id=message.grouped_id,
                         media=[media_item] if media_item else [],
-                        views=message.views, reactions=reactions_data
+                        views=views_count, reactions=reactions_data  # ИСПРАВЛЕНО: используем переменную
                     )
                     db_session.add(new_post)
+                    await db_session.commit()
+                    logging.info(f"Создан новый пост-альбом {message.id} из «{channel_title_for_log}» (Просмотры: {views_count}, Реакции: {len(reactions_data)})")
             else:
                 # Создание одиночного поста
                 new_post = Post(
                     channel_id=channel_id_for_log, message_id=message.id, date=message.date,
                     text=html_text, media=[media_item] if media_item else [],
-                    views=message.views, reactions=reactions_data
+                    views=views_count, reactions=reactions_data  # ИСПРАВЛЕНО: используем переменную
                 )
                 db_session.add(new_post)
-            
-            await db_session.commit()
-            logging.info(f"Сохранен новый пост {message.id} из «{channel_title_for_log}»")
-            # --- КОНЕЦ ИЗМЕНЕНИЙ ---
-
-        await db_session.commit()
+                await db_session.commit()
+                logging.info(f"Создан новый пост {message.id} из «{channel_title_for_log}» (Просмотры: {views_count}, Реакции: {len(reactions_data)})")
 
     except Exception as e:
         logging.error(f"Критическая ошибка при обработке канала «{channel_title_for_log}» (ID: {channel_id_for_log}): {e}")

@@ -2,13 +2,6 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 
 // --- Вспомогательные компоненты ---
 
-function LinkifiedText({ text }) {
-    if (!text) return null;
-    const urlRegex = /(https?:\/\/[^\s]+)/g;
-    const linkifiedText = text.replace(urlRegex, (url) => `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`);
-    return <div className="post-text" dangerouslySetInnerHTML={{ __html: linkifiedText }} />;
-}
-
 function PostCard({ post }) {
     const formatDate = (dateString) => new Date(dateString).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
     const getPostUrl = (p) => p.channel.username ? `https://t.me/${p.channel.username}/${p.message_id}` : `https://t.me/c/${String(p.channel.id).substring(4)}/${p.message_id}`;
@@ -18,7 +11,7 @@ function PostCard({ post }) {
 
     return (
         <div className={`post-card ${hasVisualMedia ? 'post-card-with-media' : ''}`}>
-            {/* Header остается без изменений */}
+            {/* Блок с аватаром, названием и датой */}
             <div className="post-header">
                 <a href={channelUrl} target="_blank" rel="noopener noreferrer" className="channel-link">
                     <div className="channel-avatar">
@@ -35,30 +28,35 @@ function PostCard({ post }) {
                 </a>
             </div>
 
+            {/* Блок с картинками/видео/аудио */}
             <PostMedia media={post.media} />
             
+            {/* Блок с текстом поста и кнопкой "Комментировать" */}
             {(post.text || postUrl) && (
                  <div className="post-content">
-                    {post.text && <LinkifiedText text={post.text} />}
+                    {/* Исправленное отображение текста с HTML */}
+                    {post.text && <div className="post-text" dangerouslySetInnerHTML={{ __html: post.text }} />}
                     <a href={postUrl} target="_blank" rel="noopener noreferrer" className="comment-button">Комментировать</a>
                 </div>
             )}
 
-            {/* --- НАЧАЛО ИЗМЕНЕНИЙ --- */}
-            <div className="post-footer">
-                <div className="reactions">
-                    {post.reactions?.map(reaction => (
-                        <span key={reaction.emoticon} className="reaction-item">
-                            {reaction.emoticon}
-                            <span className="reaction-count">{reaction.count}</span>
-                        </span>
-                    ))}
+            {/* ИСПРАВЛЕННЫЙ ФУТЕР: он должен быть здесь, внутри .post-card */}
+            {(post.reactions?.length > 0 || post.views) && (
+                <div className="post-footer">
+                    <div className="reactions">
+                        {post.reactions?.map(reaction => (
+                            <span key={reaction.emoticon} className="reaction-item">
+                                {reaction.emoticon}
+                                <span className="reaction-count">{reaction.count}</span>
+                            </span>
+                        ))}
+                    </div>
+                    <div className="views">
+                        {/* Условное отображение просмотров */}
+                        {post.views && `👁️ ${post.views}`}
+                    </div>
                 </div>
-                <div className="views">
-                    {post.views && `👁️ ${post.views}`}
-                </div>
-            </div>
-            {/* --- КОНЕЦ ИЗМЕНЕНИЙ --- */}
+            )}
         </div>
     );
 }
