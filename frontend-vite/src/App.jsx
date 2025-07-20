@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 
 // --- Вспомогательные компоненты ---
 
-function PostCard({ post }) {
+const PostCard = React.memo(({ post }) => {
     const formatDate = (dateString) => new Date(dateString).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
     const getPostUrl = (p) => p.channel.username ? `https://t.me/${p.channel.username}/${p.message_id}` : `https://t.me/c/${String(p.channel.id).substring(4)}/${p.message_id}`;
     const postUrl = getPostUrl(post);
@@ -28,6 +28,12 @@ function PostCard({ post }) {
                 </a>
             </div>
 
+            {post.forwarded_from && (
+                <div className="forwarded-from-banner">
+                    Переслано из <b>{post.forwarded_from.from_name}</b>
+                </div>
+            )}
+            
             {/* Блок с картинками/видео/аудио */}
             <PostMedia media={post.media} />
             
@@ -59,18 +65,25 @@ function PostCard({ post }) {
             )}
         </div>
     );
-}
+});
 
-function PostMedia({ media }) {
+const PostMedia = React.memo(({ media }) => {
+    const [currentIndex, setCurrentIndex] = useState(0);
+    const [imageErrors, setImageErrors] = useState(new Set());
+
     if (!media || media.length === 0) return null;
+    
     const visualMedia = media.filter(item => item.type === 'photo' || item.type === 'video');
     const audioMedia = media.filter(item => item.type === 'audio');
-    const [currentIndex, setCurrentIndex] = useState(0);
 
     if (visualMedia.length === 0 && audioMedia.length === 0) return null;
 
     const goToPrevious = () => setCurrentIndex(prev => (prev === 0 ? visualMedia.length - 1 : prev - 1));
     const goToNext = () => setCurrentIndex(prev => (prev === visualMedia.length - 1 ? 0 : prev + 1));
+
+    const handleImageError = useCallback((url) => {
+        setImageErrors(prev => new Set([...prev, url]));
+    }, []);
 
     return (
         <>
@@ -78,7 +91,19 @@ function PostMedia({ media }) {
                 <div className="post-media-gallery">
                     {visualMedia.map((item, index) => (
                         <div key={index} className={`slider-item ${index === currentIndex ? 'active' : ''}`}>
-                            {item.type === 'photo' && <img src={item.url} className="post-media-visual" alt={`Изображение ${index + 1}`} loading="lazy" />}
+                            {item.type === 'photo' && (
+                                imageErrors.has(item.url) ? (
+                                    <div className="image-placeholder">Не удалось загрузить изображение</div>
+                                ) : (
+                                    <img 
+                                        src={item.url} 
+                                        className="post-media-visual" 
+                                        alt={`Изображение ${index + 1}`} 
+                                        loading="lazy"
+                                        onError={() => handleImageError(item.url)}
+                                    />
+                                )
+                            )}
                             {item.type === 'video' && <video controls muted playsInline className="post-media-visual"><source src={item.url} /></video>}
                         </div>
                     ))}
@@ -94,21 +119,41 @@ function PostMedia({ media }) {
             {audioMedia.map((item, index) => ( <audio key={index} controls className="post-media-audio"><source src={item.url} /></audio> ))}
         </>
     );
-}
+});
 
 function Header({ onRefresh, onScrollUp }) {
-    const handleMobileTap = (e, action) => {
+    const handleButtonPress = (e, action) => {
         e.preventDefault();
+        e.stopPropagation();
+        
         const button = e.currentTarget;
         button.classList.add('button--active');
+        
+        // Добавляем haptic feedback для мобильных устройств
+        if (window.Telegram?.WebApp?.HapticFeedback) {
+            window.Telegram.WebApp.HapticFeedback.impactOccurred('light');
+        }
+        
         action();
         setTimeout(() => button.classList.remove('button--active'), 150);
     };
     
     return (
         <header className="app-header">
-            <button onClick={onScrollUp} onTouchEnd={(e) => handleMobileTap(e, onScrollUp)} className="header-button">Вверх ⬆️</button>
-            <button onClick={onRefresh} onTouchEnd={(e) => handleMobileTap(e, onRefresh)} className="header-button">Обновить 🔄</button>
+            <button 
+                onTouchEnd={(e) => handleButtonPress(e, onScrollUp)}
+                onClick={(e) => !e.touches && handleButtonPress(e, onScrollUp)}
+                className="header-button"
+            >
+                Вверх ⬆️
+            </button>
+            <button 
+                onTouchEnd={(e) => handleButtonPress(e, onRefresh)}
+                onClick={(e) => !e.touches && handleButtonPress(e, onRefresh)}
+                className="header-button"
+            >
+                Обновить 🔄
+            </button>
         </header>
     );
 }
@@ -121,7 +166,6 @@ function RadialLoader() {
   );
 }
 
-
 // --- Основной компонент приложения ---
 
 function App() {
@@ -129,7 +173,7 @@ function App() {
     const [error, setError] = useState(null);
     const [hasMore, setHasMore] = useState(true);
     const [isFetching, setIsFetching] = useState(false);
-    const [initialLoading, setInitialLoading] = useState(true); // При запуске показываем лоадер
+    const [initialLoading, setInitialLoading] = useState(true);
     const [isBackfilling, setIsBackfilling] = useState(false);
     
     const page = useRef(1);
@@ -139,35 +183,49 @@ function App() {
     const pullDeltaY = useRef(0);
     const isPulling = useRef(false);
     
+    // Оптимизированная функция удаления дубликатов
+    const removeDuplicates = useCallback((existingPosts, newPosts) => {
+        const existingIds = new Set(existingPosts.map(p => `${p.channel.id}-${p.message_id}`));
+        const uniqueNewPosts = newPosts.filter(p => !existingIds.has(`${p.channel.id}-${p.message_id}`));
+        return [...existingPosts, ...uniqueNewPosts];
+    }, []);
 
     const fetchPosts = useCallback(async (isRefresh = false) => {
         if (isFetchingRef.current) return;
         if (!hasMore && !isRefresh) return;
         
-        isFetchingRef.current = true;
-        setIsFetching(true);
-        if (isRefresh) {
-            page.current = 1;
-            setPosts([]);
-            setError(null);
-            setHasMore(true);
-            setIsBackfilling(false);
-        }
-
+        const controller = new AbortController();
+        
         try {
-            // Убедитесь, что URL правильный для вашего продакшн-окружения
-            const response = await fetch(`https://telegram-feed-app-production.up.railway.app/api/feed/?page=${page.current}`, {
-                headers: { 'Authorization': `tma ${window.Telegram.WebApp.initData}` }
-            });
+            isFetchingRef.current = true;
+            setIsFetching(true);
+            
+            if (isRefresh) {
+                page.current = 1;
+                setPosts([]);
+                setError(null);
+                setHasMore(true);
+                setIsBackfilling(false);
+            }
+
+            const response = await fetch(
+                `https://telegram-feed-app-production.up.railway.app/api/feed/?page=${page.current}`, 
+                {
+                    headers: { 'Authorization': `tma ${window.Telegram.WebApp.initData}` },
+                    signal: controller.signal
+                }
+            );
 
             if (!response.ok) {
-                const errorData = await response.json().catch(() => ({ detail: `HTTP ошибка: ${response.status}` }));
+                const errorData = await response.json().catch(() => ({ 
+                    detail: `HTTP ошибка: ${response.status}` 
+                }));
                 throw new Error(errorData.detail);
             }
 
             const { posts: newPosts, status } = await response.json();
 
-            setPosts(prev => isRefresh ? newPosts : [...new Set([...prev, ...newPosts].map(p => JSON.stringify(p)))].map(s => JSON.parse(s)));
+            setPosts(prev => isRefresh ? newPosts : removeDuplicates(prev, newPosts));
             page.current += 1;
             
             if (status === "backfilling") {
@@ -176,18 +234,24 @@ function App() {
             } else {
                 setHasMore(newPosts.length > 0);
             }
+            
         } catch (err) {
-            setError(err.message);
-            setHasMore(false);
+            if (err.name !== 'AbortError') {
+                console.error('Fetch error:', err);
+                setError(err.message);
+                setHasMore(false);
+            }
         } finally {
             isFetchingRef.current = false;
             setIsFetching(false);
-            if (isRefresh) setInitialLoading(false);
+            setInitialLoading(false);
         }
-    }, [hasMore]);
+        
+        return () => controller.abort();
+    }, [hasMore, removeDuplicates]);
 
     const handleRefresh = useCallback(() => {
-        if (window.Telegram.WebApp.HapticFeedback) {
+        if (window.Telegram?.WebApp?.HapticFeedback) {
             window.Telegram.WebApp.HapticFeedback.impactOccurred('light');
         }
         fetchPosts(true);
@@ -201,17 +265,12 @@ function App() {
         const tg = window.Telegram.WebApp;
 
         const applyThemeClass = () => {
-            // Устанавливаем класс 'light' или 'dark' для тега <body>
             document.body.className = tg.colorScheme;
         };
 
-        // Устанавливаем тему при первой загрузке
         applyThemeClass();
-
-        // Добавляем слушатель, чтобы тема менялась динамически
         tg.onEvent('themeChanged', applyThemeClass);
 
-        // Убираем слушатель при размонтировании компонента
         return () => {
             tg.offEvent('themeChanged', applyThemeClass);
         };
@@ -234,11 +293,33 @@ function App() {
              setError("Не удалось загрузить Telegram Web App API.");
              setInitialLoading(false);
         }
+        
+        // Очистка при размонтировании
+        return () => {
+            isFetchingRef.current = false;
+            if (window.refreshTimeout) {
+                clearTimeout(window.refreshTimeout);
+            }
+        };
     }, [fetchPosts]);
 
     useEffect(() => {
         const indicator = document.getElementById('refresh-indicator');
         if (!indicator) return;
+        
+        let animationFrame = null;
+        
+        const PULL_THRESHOLD = 70;
+        const PULL_RESISTANCE = 2;
+        
+        const updateIndicatorPosition = (delta) => {
+            if (animationFrame) cancelAnimationFrame(animationFrame);
+            
+            animationFrame = requestAnimationFrame(() => {
+                const position = Math.min(delta / PULL_RESISTANCE - 50, 70);
+                indicator.style.transform = `translateY(${position}px)`;
+            });
+        };
         
         const handleTouchStart = (e) => { 
             if (window.scrollY === 0) { 
@@ -252,19 +333,23 @@ function App() {
             const delta = e.touches[0].clientY - pullStartY.current; 
             if (delta > 0) { 
                 pullDeltaY.current = delta;
-                indicator.style.top = `${Math.min(delta / 2 - 50, 70)}px`;
+                updateIndicatorPosition(delta);
             }
         };
         
         const handleTouchEnd = () => { 
             if (!isPulling.current) return; 
-            if (pullDeltaY.current > 70) { 
-                indicator.style.top = '20px'; 
+            
+            if (pullDeltaY.current > PULL_THRESHOLD) { 
+                indicator.style.transform = 'translateY(20px)'; 
                 handleRefresh(); 
-                setTimeout(() => { indicator.style.top = '-50px'; }, 1000); 
+                setTimeout(() => { 
+                    indicator.style.transform = 'translateY(-50px)'; 
+                }, 1000); 
             } else { 
-                indicator.style.top = '-50px'; 
+                indicator.style.transform = 'translateY(-50px)'; 
             } 
+            
             isPulling.current = false; 
             pullDeltaY.current = 0; 
         };
@@ -274,6 +359,7 @@ function App() {
         window.addEventListener('touchend', handleTouchEnd);
         
         return () => { 
+            if (animationFrame) cancelAnimationFrame(animationFrame);
             window.removeEventListener('touchstart', handleTouchStart);
             window.removeEventListener('touchmove', handleTouchMove);
             window.removeEventListener('touchend', handleTouchEnd);
@@ -313,15 +399,13 @@ function App() {
         <>
             <Header onRefresh={handleRefresh} onScrollUp={scrollToTop} />
             
-            {/* --- НАЧАЛО ИЗМЕНЕНИЙ --- */}
-            
-            {/* 1. Выносим индикатор обновления ИЗ контейнера ленты */}
+            {/* Индикатор pull-to-refresh */}
             <div id="refresh-indicator" className="pull-to-refresh-indicator">
                 <RadialLoader />
             </div>
 
             <div className="feed-container">
-                {posts.map(post => <PostCard key={`${post.channel_id}-${post.message_id}`} post={post} />)}
+                {posts.map(post => <PostCard key={`${post.channel.id}-${post.message_id}`} post={post} />)}
                 
                 {isFetching && !initialLoading && (
                     <div className="loader-container">
@@ -334,9 +418,6 @@ function App() {
                         Догружаем старые посты... ⏳<br/><small>Потяните, чтобы обновить.</small>
                     </div>
                 )}
-
-                {/* Он больше не здесь */}
-                {/* <div id="refresh-indicator" ... > */}
 
                 <div ref={loader} />
             </div>

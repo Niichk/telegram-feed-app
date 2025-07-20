@@ -43,6 +43,8 @@ async def add_subscription(
     new_subscription = Subscription(user_id=user_id, channel_id=channel_id)
     session.add(new_subscription)
 
+    user.subscription_count += 1
+
     # Шаг 5: Сохраняем изменения.
     await session.commit()
     
@@ -89,6 +91,12 @@ async def delete_subscription(session: AsyncSession, user_id: int, channel_id: i
     existing_subscription = (await session.execute(sub_query)).scalars().first()
 
     if existing_subscription:
+        # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
+        user = await session.get(User, user_id)
+        if user and user.subscription_count > 0:
+            user.subscription_count -= 1
+        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
         await session.delete(existing_subscription)
         await session.commit()
         return True

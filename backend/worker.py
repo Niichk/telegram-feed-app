@@ -57,7 +57,9 @@ s3_client = boto3.client(
     aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
     region_name=S3_REGION
 )
-md = MarkdownIt().enable('linkify')
+md = MarkdownIt(
+    options_update={'linkify': True}
+)
 
 async def upload_media_to_s3(message: types.Message, channel_id: int) -> dict | None:
     """Загружает медиафайл в S3 и возвращает словарь с его данными."""
@@ -162,7 +164,7 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
         async for message in client.iter_messages(entity, limit=post_limit, offset_id=offset_id):
             if not message or (not message.text and not message.media and not message.poll):
                 continue
-            
+
             # --- ИСПРАВЛЕНИЯ ---
             # 1. Ищем существующий пост в БД
             existing_post_query = await db_session.execute(
@@ -182,6 +184,10 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                             # Для кастомных эмодзи
                             reactions_data.append({"document_id": r.reaction.document_id, "count": r.count})
             
+            forward_data = None
+            if message.fwd_from and hasattr(message.fwd_from, 'from_name') and message.fwd_from.from_name:
+                forward_data = {"from_name": message.fwd_from.from_name}
+
             # 3. ИСПРАВЛЕНО: Безопасное получение просмотров
             views_count = getattr(message, 'views', 0) or 0
             
@@ -189,6 +195,7 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
             if existing_post:
                 existing_post.views = views_count
                 existing_post.reactions = reactions_data
+                existing_post.forwarded_from = forward_data if forward_data is not None else {}
                 # Если у поста обновился текст (например, было редактирование), тоже обновим
                 if message.text:
                     existing_post.text = md.render(message.text)
@@ -211,6 +218,7 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                     # Обновляем просмотры и реакции для главного поста альбома
                     existing_album_post.views = views_count
                     existing_album_post.reactions = reactions_data
+                    existing_album_post.forwarded_from = forward_data if forward_data is not None else {}
                     
                     # Добавляем новое медиа, если его еще нет
                     if media_item and media_item not in existing_album_post.media:
@@ -224,7 +232,8 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                         channel_id=channel_id_for_log, message_id=message.id, date=message.date,
                         text=html_text, grouped_id=message.grouped_id,
                         media=[media_item] if media_item else [],
-                        views=views_count, reactions=reactions_data  # ИСПРАВЛЕНО: используем переменную
+                        views=views_count, reactions=reactions_data,
+                        forwarded_from=forward_data  # ИСПРАВЛЕНО: используем переменную
                     )
                     db_session.add(new_post)
                     await db_session.commit()
@@ -234,7 +243,8 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                 new_post = Post(
                     channel_id=channel_id_for_log, message_id=message.id, date=message.date,
                     text=html_text, media=[media_item] if media_item else [],
-                    views=views_count, reactions=reactions_data  # ИСПРАВЛЕНО: используем переменную
+                    views=views_count, reactions=reactions_data,
+                    forwarded_from=forward_data  # ИСПРАВЛЕНО: используем переменную
                 )
                 db_session.add(new_post)
                 await db_session.commit()
