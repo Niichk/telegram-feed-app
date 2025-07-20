@@ -227,24 +227,17 @@ async def process_grouped_messages(grouped_messages, channel_id_for_log, db_sess
     forward_data = None
     if main_message.fwd_from:
         try:
-            if hasattr(main_message.fwd_from, 'from_name') and main_message.fwd_from.from_name:
-                forward_data = {"from_name": main_message.fwd_from.from_name}
-            elif hasattr(main_message.fwd_from, 'from_id') and main_message.fwd_from.from_id:
-                try:
-                    source_entity = await client.get_entity(main_message.fwd_from.from_id)
-                    if hasattr(source_entity, 'title'):
-                        forward_data = {"from_name": source_entity.title} # type: ignore
-                    elif hasattr(source_entity, 'first_name'):
-                        name = source_entity.first_name # type: ignore
-                        if hasattr(source_entity, 'last_name') and source_entity.last_name: # type: ignore
-                            name += f" {source_entity.last_name}" # type: ignore
-                        forward_data = {"from_name": name}
-                except:
-                    forward_data = {"from_name": "Неизвестный источник"}
-            else:
-                forward_data = {"from_name": "Скрытый канал"}
-        except:
-            forward_data = {"from_name": "Источник недоступен"}
+            if hasattr(main_message.fwd_from, 'from_id') and main_message.fwd_from.from_id:
+                source_entity = await client.get_entity(main_message.fwd_from.from_id)
+                from_name = getattr(source_entity, 'title', getattr(source_entity, 'first_name', 'Неизвестный источник'))
+                username = getattr(source_entity, 'username', None)
+                channel_id = getattr(source_entity, 'id', None)
+                forward_data = {"from_name": from_name, "username": username, "channel_id": channel_id}
+            elif hasattr(main_message.fwd_from, 'from_name') and main_message.fwd_from.from_name:
+                forward_data = {"from_name": main_message.fwd_from.from_name, "username": None, "channel_id": None}
+        except Exception as e:
+            logging.warning(f"Не удалось получить entity для репоста в альбоме: {e}")
+            forward_data = {"from_name": "Недоступный источник", "username": None, "channel_id": None}
     
     # Создаем один пост с несколькими медиафайлами
     html_text = md.render(main_message.text) if main_message.text else None
@@ -312,39 +305,19 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
             forward_data = None
             if message.fwd_from:
                 try:
-                    if hasattr(message.fwd_from, 'from_name') and message.fwd_from.from_name:
-                        # У канала есть публичное имя
-                        forward_data = {"from_name": message.fwd_from.from_name}
-                        logging.debug(f"Репост из канала: {message.fwd_from.from_name}")
-                    elif hasattr(message.fwd_from, 'from_id') and message.fwd_from.from_id:
-                        # Канал без публичного имени, получаем по ID
-                        try:
-                            source_entity = await client.get_entity(message.fwd_from.from_id)
-                            if hasattr(source_entity, 'title'):
-                                forward_data = {"from_name": source_entity.title} # type: ignore
-                                logging.debug(f"Репост из канала (по ID): {source_entity.title}") # type: ignore
-                            elif hasattr(source_entity, 'first_name'):
-                                name = source_entity.first_name # type: ignore
-                                if hasattr(source_entity, 'last_name') and source_entity.last_name: # type: ignore
-                                    name += f" {source_entity.last_name}" # type: ignore
-                                forward_data = {"from_name": name}
-                                logging.debug(f"Репост от пользователя: {name}")
-                            else:
-                                # ДОБАВИТЬ: fallback для неизвестного типа entity
-                                forward_data = {"from_name": "Неизвестный источник"}
-                        except ValueError as ve:
-                            logging.warning(f"Entity не найден для репоста: {ve}")
-                            forward_data = {"from_name": "Недоступный источник"}
-                        except Exception as e:
-                            logging.warning(f"Не удалось получить информацию об источнике репоста: {e}")
-                            forward_data = {"from_name": "Неизвестный источник"}
-                    else:
-                        # Скрытый источник
-                        forward_data = {"from_name": "Скрытый канал"}
-                        logging.debug("Репост из скрытого источника")
+                    # Сначала пытаемся получить данные из from_id, это надежнее
+                    if hasattr(message.fwd_from, 'from_id') and message.fwd_from.from_id:
+                        source_entity = await client.get_entity(message.fwd_from.from_id)
+                        from_name = getattr(source_entity, 'title', getattr(source_entity, 'first_name', 'Неизвестный источник'))
+                        username = getattr(source_entity, 'username', None)
+                        channel_id = getattr(source_entity, 'id', None)
+                        forward_data = {"from_name": from_name, "username": username, "channel_id": channel_id}
+                    # Если from_id нет, но есть from_name (для старых репостов)
+                    elif hasattr(message.fwd_from, 'from_name') and message.fwd_from.from_name:
+                        forward_data = {"from_name": message.fwd_from.from_name, "username": None, "channel_id": None}
                 except Exception as e:
-                    logging.error(f"Ошибка обработки информации о репосте: {e}")
-                    forward_data = {"from_name": "Источник недоступен"}
+                    logging.warning(f"Не удалось получить entity для репоста: {e}")
+                    forward_data = {"from_name": "Недоступный источник", "username": None, "channel_id": None}
 
             views_count = getattr(message, 'views', 0) or 0
             
@@ -361,7 +334,7 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                 # ДОБАВИТЬ: валидация данных
                 if not message.id or not message.date:
                     logging.warning(f"Пропускаю сообщение с некорректными данными: ID={message.id}, date={message.date}")
-                    continue
+                    return
                     
                 media_item = await upload_media_to_s3(message, channel_id_for_log)
                 html_text = md.render(message.text) if message.text else None
@@ -403,27 +376,17 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                 # ИСПРАВЛЕНИЕ: применяем ту же логику для групповых сообщений
                 forward_data = None
                 if main_message.fwd_from:
-                    try:
-                        if hasattr(main_message.fwd_from, 'from_name') and main_message.fwd_from.from_name:
-                            forward_data = {"from_name": main_message.fwd_from.from_name}
-                        elif hasattr(main_message.fwd_from, 'from_id') and main_message.fwd_from.from_id:
-                            try:
-                                source_entity = await client.get_entity(main_message.fwd_from.from_id)
-                                if hasattr(source_entity, 'title'):
-                                    forward_data = {"from_name": source_entity.title} # type: ignore
-                                elif hasattr(source_entity, 'first_name'):
-                                    name = source_entity.first_name # type: ignore
-                                    if hasattr(source_entity, 'last_name') and source_entity.last_name: # type: ignore
-                                        name += f" {source_entity.last_name}" # type: ignore
-                                    forward_data = {"from_name": name}
-                            except:
-                                forward_data = {"from_name": "Неизвестный источник"}
-                        else:
-                            forward_data = {"from_name": "Скрытый канал"}
-                    except:
-                        forward_data = {"from_name": "Источник недоступен"}
-                
-                existing_group_post.forwarded_from = forward_data # type: ignore
+                 try:
+                    if hasattr(main_message.fwd_from, 'from_id') and main_message.fwd_from.from_id:
+                        source_entity = await client.get_entity(main_message.fwd_from.from_id)
+                        from_name = getattr(source_entity, 'title', getattr(source_entity, 'first_name', 'Неизвестный источник'))
+                        username = getattr(source_entity, 'username', None)
+                        channel_id = getattr(source_entity, 'id', None)
+                        existing_group_post.forwarded_from = {"from_name": from_name, "username": username, "channel_id": channel_id}
+                    elif hasattr(main_message.fwd_from, 'from_name') and main_message.fwd_from.from_name:
+                        existing_group_post.forwarded_from = {"from_name": main_message.fwd_from.from_name, "username": None, "channel_id": None}
+                 except Exception:
+                    existing_group_post.forwarded_from = {"from_name": "Недоступный источник", "username": None, "channel_id": None} # type: ignore
                 updated_posts.append(existing_group_post)
         
         # Один commit для всех изменений
