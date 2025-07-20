@@ -174,7 +174,7 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
             # 2. Готовим данные по реакциям
             reactions_data = []
             if message.reactions:
-                reactions_data = [{"emoticon": r.emoticon, "count": r.count} for r in message.reactions.results if r.count > 0]
+                reactions_data = [{"emoticon": r.reaction.emoticon, "count": r.count} for r in message.reactions.results if r.count > 0]
             
             # 3. Если пост уже есть, обновляем его и идем дальше
             if existing_post:
