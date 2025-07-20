@@ -337,15 +337,29 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                 # Обновляем существующий групповой пост
                 main_message = messages[0]
                 existing_group_post.views = getattr(main_message, 'views', 0) or 0
+                
+                forward_data = None
+                if main_message.fwd_from and hasattr(main_message.fwd_from, 'from_name') and main_message.fwd_from.from_name:
+                    forward_data = {"from_name": main_message.fwd_from.from_name}
+                existing_group_post.forwarded_from = forward_data # type: ignore
+                
+
                 # Здесь можно добавить логику обновления медиа, если нужно
                 updated_posts.append(existing_group_post)
         
         # Один commit для всех изменений
         try:
+            
+            # Добавляем новые посты в сессию
             if new_posts:
                 db_session.add_all(new_posts)
             
+            # Объекты в updated_posts уже находятся в сессии, 
+            # так что commit() сохранит изменения в них.
+            # Нам не нужно делать add_all для них.
+            
             await db_session.commit()
+            
             
             posts_created = len(new_posts)
             posts_updated = len(updated_posts)
