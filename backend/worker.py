@@ -84,7 +84,7 @@ def process_text(text: str | None) -> str | None:
     if not text:
         return None
     # markdown-it с плагином linkify-it-py найдет и обернет ссылки в <a>
-    html = md.render(text)
+    html = md.renderInline(text)
     # Очищаем получившийся HTML для защиты от XSS
     safe_html = bleach.clean(html, tags=ALLOWED_TAGS, attributes=ALLOWED_ATTRIBUTES)
     return safe_html
