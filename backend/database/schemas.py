@@ -12,6 +12,7 @@ class ChannelInPost(BaseModel):
     id: int
     title: str
     username: str | None
+    avatar_url: str | None = None
 
 class PostInFeed(BaseModel):
     model_config = ConfigDict(from_attributes=True)

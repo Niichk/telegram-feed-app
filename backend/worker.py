@@ -5,6 +5,7 @@ import boto3
 import io
 from dotenv import load_dotenv
 from telethon import TelegramClient, types
+from telethon.tl.types import InputPeerChannel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
@@ -112,6 +113,39 @@ async def upload_media_to_s3(message: types.Message, channel_id: int) -> dict | 
 
     except Exception as e:
         logging.error(f"Ошибка загрузки медиа из поста {message.id}: {e}")
+        return None
+    
+async def upload_avatar_to_s3(channel_entity) -> str | None:
+    """Скачивает аватар канала, загружает в S3 и возвращает URL."""
+    try:
+        # Создаем уникальное имя файла для аватара
+        file_key = f"avatars/{channel_entity.id}.jpg"
+        
+        # Скачиваем фото профиля во временный файл в памяти
+        file_in_memory = io.BytesIO()
+        await client.download_profile_photo(channel_entity, file=file_in_memory)
+        
+        # Если у канала нет аватара, фото будет пустым
+        if file_in_memory.getbuffer().nbytes == 0:
+            logging.info(f"У канала «{channel_entity.title}» нет аватара.")
+            return None
+            
+        file_in_memory.seek(0)
+        
+        # Загружаем в S3
+        s3_client.upload_fileobj(
+            file_in_memory, 
+            S3_BUCKET_NAME, 
+            file_key, 
+            ExtraArgs={'ContentType': 'image/jpeg'}
+        )
+        
+        avatar_url = f"https://{S3_BUCKET_NAME}.s3.{S3_REGION}.amazonaws.com/{file_key}"
+        logging.info(f"Аватар для канала «{channel_entity.title}» загружен в S3: {avatar_url}")
+        return avatar_url
+
+    except Exception as e:
+        logging.error(f"Не удалось загрузить аватар для канала «{channel_entity.title}»: {e}")
         return None
 
 

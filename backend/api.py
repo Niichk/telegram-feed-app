@@ -75,15 +75,14 @@ def is_valid_tma_data(init_data: str) -> dict | None:
 @app.get("/api/feed/", response_model=schemas.FeedResponse)
 @cache(expire=120)
 async def get_feed_for_user(
-    # Убираем background_tasks из параметров
     session: AsyncSession = Depends(get_db_session),
     page: int = 1,
     authorization: str | None = Header(None)
 ):
-    # ВЕСЬ КОД ВНУТРИ ФУНКЦИИ ОСТАЕТСЯ БЕЗ ИЗМЕНЕНИЙ!
+    
     if authorization is None or not authorization.startswith("tma "):
         raise HTTPException(status_code=401, detail="Not authorized")
-    
+
     init_data = authorization.split(" ", 1)[1]
     validated_data = is_valid_tma_data(init_data)
     
@@ -95,7 +94,9 @@ async def get_feed_for_user(
         user_id = user_info['id']
     except (KeyError, json.JSONDecodeError):
         raise HTTPException(status_code=403, detail="Invalid user data in initData")
-
+    
+    
+    
     limit = 20
     offset = (page - 1) * limit
     feed = await db.get_user_feed(session=session, user_id=user_id, limit=limit, offset=offset)

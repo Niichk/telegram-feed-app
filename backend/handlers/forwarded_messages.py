@@ -1,8 +1,8 @@
 from aiogram import Router, types, F
 from sqlalchemy.ext.asyncio import AsyncSession
 from database.requests import add_subscription
-# --- ИЗМЕНЕНО: Импортируем нашу новую функцию из воркера ---
-from worker import fetch_posts_for_channel, client
+from worker import fetch_posts_for_channel, upload_avatar_to_s3, client 
+from telethon.tl.types import InputPeerChannel 
 
 router = Router()
 
@@ -45,6 +45,18 @@ async def handle_forwarded_message(message: types.Message, session: AsyncSession
         if not client.is_connected():
             await client.connect()
         
+        # 1. Получаем entity канала через Telethon
+        channel_entity = await client.get_entity(new_channel_obj.id)
+        
+        # 2. Скачиваем и загружаем аватар, получаем URL
+        avatar_url = await upload_avatar_to_s3(channel_entity)
+        
+        # 3. Сохраняем URL в наш объект и в базу данных
+        if avatar_url:
+            new_channel_obj.avatar_url = avatar_url
+            session.add(new_channel_obj)
+            await session.commit()
+
         # Вызываем функцию сбора постов для свежедобавленного канала
         await fetch_posts_for_channel(channel=new_channel_obj, db_session=session, post_limit=20) # Можно поставить лимит побольше для первого раза
         

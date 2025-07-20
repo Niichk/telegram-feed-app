@@ -32,6 +32,7 @@ class Channel(Base):
     # Юзернейм канала (для публичных каналов)
     username: Mapped[str] = mapped_column(String(150), nullable=True)
     posts: Mapped[List["Post"]] = relationship(back_populates="channel")
+    avatar_url: Mapped[str] = mapped_column(String(500), nullable=True)
 
 class Subscription(Base):
     __tablename__ = 'subscriptions'
