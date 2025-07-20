@@ -4,7 +4,7 @@ import os
 import json
 import logging
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Header, Depends, Query # <--- ИМПОРТИРУЕМ Query
+from fastapi import FastAPI, HTTPException, Header, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, AsyncGenerator
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,10 +21,9 @@ from fastapi_cache.decorator import cache
 from redis import asyncio as aioredis
 
 load_dotenv()
-# Загружаем токен из переменных окружения
+
 BOT_TOKEN = os.getenv("API_TOKEN")
 REDIS_URL = os.getenv("REDIS_URL")
-# --- ДОБАВЛЕНО: Загружаем URL фронтенда ---
 FRONTEND_URL = os.getenv("FRONTEND_URL")
 
 app = FastAPI(title="Feed Reader API")
@@ -37,24 +36,23 @@ async def on_startup():
         FastAPICache.init(RedisBackend(redis_client), prefix="fastapi-cache")
         print("FastAPI-Cache with Redis backend is initialized.")
 
-# --- ИЗМЕНЕНО: Более безопасная настройка CORS ---
-# Для продакшена разрешаем только конкретный URL фронтенда
 origins = []
 if FRONTEND_URL:
     origins.append(FRONTEND_URL)
 else:
-    # Для локальной разработки оставляем localhost
     origins.extend([
         "http://localhost",
         "http://127.0.0.1",
-        "http://localhost:5173", # Стандартный порт Vite
+        "http://localhost:5173",
     ])
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["GET"],
+    # --- ИСПРАВЛЕНИЕ: Разрешаем методы GET и OPTIONS ---
+    allow_methods=["GET", "OPTIONS"],
+    # Можно также использовать ["*"] для разрешения всех стандартных методов
     allow_headers=["Authorization"],
 )
 
@@ -78,16 +76,13 @@ def is_valid_tma_data(init_data: str) -> dict | None:
     except Exception:
         return None
 
-# --- ИЗМЕНЕНО: Добавлена валидация для 'page' ---
 @app.get("/api/feed/", response_model=schemas.FeedResponse)
 @cache(expire=120)
 async def get_feed_for_user(
     session: AsyncSession = Depends(get_db_session),
-    # page должен быть целым числом, > 0. По умолчанию 1.
     page: int = Query(1, gt=0),
     authorization: str | None = Header(None)
 ):
-
     if authorization is None or not authorization.startswith("tma "):
         raise HTTPException(status_code=401, detail="Not authorized")
 
@@ -109,10 +104,6 @@ async def get_feed_for_user(
 
     status = "ok"
     if len(feed) < limit:
-        # Теперь, если постов меньше лимита, это может быть конец ленты или начало дозагрузки.
-        # Чтобы не создавать заявку каждый раз, когда пользователь доходит до конца,
-        # проверяем, есть ли посты вообще. Если постов 0, то это может быть новый пользователь,
-        # и заявка на дозагрузку ему не нужна (она создается при прокрутке).
         if page > 1:
             request_exists = await db.check_backfill_request_exists(session, user_id)
             if not request_exists:
@@ -123,6 +114,5 @@ async def get_feed_for_user(
             status = "backfilling"
         elif page == 1 and not feed:
              status = "empty"
-
 
     return {"posts": feed, "status": status}
