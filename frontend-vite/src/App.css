@@ -3,8 +3,12 @@ body {
             margin: 0;
             padding: 72px 12px 12px;
             overscroll-behavior-y: contain;
-            background-color: #f0f4f8; /* Если переменной нет, фон будет светло-серым */
+            background-color: var(--tg-theme-bg-color); /* Если переменной нет, фон будет светло-серым */
             color: var(--tg-theme-text-color);
+        }
+
+        body.light {
+            background-color: #c5d6e6; /* Наш голубой фон */
         }
 
         /* --- Стили хедера --- */

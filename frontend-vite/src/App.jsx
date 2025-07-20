@@ -123,6 +123,7 @@ function App() {
     const pullStartY = useRef(0);
     const pullDeltaY = useRef(0);
     const isPulling = useRef(false);
+    
 
     const fetchPosts = useCallback(async (isRefresh = false) => {
         if (isFetchingRef.current) return;
@@ -180,6 +181,26 @@ function App() {
     const scrollToTop = () => {
         window.scrollTo({ top: 0, behavior: 'smooth' });
     };
+
+    useEffect(() => {
+        const tg = window.Telegram.WebApp;
+
+        const applyThemeClass = () => {
+            // Устанавливаем класс 'light' или 'dark' для тега <body>
+            document.body.className = tg.colorScheme;
+        };
+
+        // Устанавливаем тему при первой загрузке
+        applyThemeClass();
+
+        // Добавляем слушатель, чтобы тема менялась динамически
+        tg.onEvent('themeChanged', applyThemeClass);
+
+        // Убираем слушатель при размонтировании компонента
+        return () => {
+            tg.offEvent('themeChanged', applyThemeClass);
+        };
+    }, []);
 
     useEffect(() => {
         const tg = window.Telegram.WebApp;
