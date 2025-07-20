@@ -1,28 +1,28 @@
-from .models import User, Channel, Subscription, Post, BackfillRequest 
-from sqlalchemy.dialects.postgresql import insert 
+from .models import User, Channel, Subscription, Post, BackfillRequest
+from sqlalchemy.dialects.postgresql import insert
 from .engine import session_maker
 from sqlalchemy import select, and_
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
-# --- ИЗМЕНЕНО: Функция теперь возвращает кортеж (сообщение, объект канала) ---
+# --- ИЗМЕНЕНО: Функция теперь не принимает личные данные пользователя ---
 async def add_subscription(
-    session: AsyncSession, 
-    user_id: int, 
-    user_fn: str, 
-    user_un: str, 
-    channel_id: int, 
-    channel_title: str, 
+    session: AsyncSession,
+    user_id: int,
+    # user_fn: str, # УДАЛЕНО
+    # user_un: str, # УДАЛЕНО
+    channel_id: int,
+    channel_title: str,
     channel_un: str
 ) -> tuple[str, Channel | None]:
-    
+
     # Шаг 1: Ищем подписку
     sub_query = select(Subscription).where(
         Subscription.user_id == user_id,
         Subscription.channel_id == channel_id
     )
     existing_subscription = (await session.execute(sub_query)).scalars().first()
-    
+
     # Шаг 2: Если подписка найдена, получаем объект канала и выходим.
     if existing_subscription:
         channel = await session.get(Channel, channel_id)
@@ -31,7 +31,8 @@ async def add_subscription(
     # Шаг 3: Если подписки НЕТ, начинаем работу.
     user = await session.get(User, user_id)
     if not user:
-        user = User(id=user_id, first_name=user_fn, username=user_un)
+        # --- ИЗМЕНЕНО: Создаем пользователя только с ID ---
+        user = User(id=user_id)
         session.add(user)
 
     channel = await session.get(Channel, channel_id)
@@ -47,7 +48,7 @@ async def add_subscription(
 
     # Шаг 5: Сохраняем изменения.
     await session.commit()
-    
+
     # Возвращаем сообщение и объект свежесозданного канала
     return f"✅ Канал «{channel_title}» успешно добавлен! Начинаю загрузку последних постов...", channel
 
@@ -75,7 +76,7 @@ async def get_user_subscriptions(session: AsyncSession, user_id: int) -> list[Ch
         .where(Subscription.user_id == user_id)
         .order_by(Channel.title) # Сортируем по алфавиту для удобства
     )
-    
+
     result = await session.execute(subs_query)
     return list(result.scalars().all())
 
@@ -100,7 +101,7 @@ async def delete_subscription(session: AsyncSession, user_id: int, channel_id: i
         await session.delete(existing_subscription)
         await session.commit()
         return True
-    
+
     return False
 
 async def create_backfill_request(session: AsyncSession, user_id: int):

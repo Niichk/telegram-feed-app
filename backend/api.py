@@ -1,10 +1,10 @@
 import hmac
 import hashlib
-import os 
+import os
 import json
 import logging
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Header, Depends
+from fastapi import FastAPI, HTTPException, Header, Depends, Query # <--- ИМПОРТИРУЕМ Query
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, AsyncGenerator
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,31 +23,38 @@ from redis import asyncio as aioredis
 load_dotenv()
 # Загружаем токен из переменных окружения
 BOT_TOKEN = os.getenv("API_TOKEN")
-REDIS_URL = os.getenv("REDIS_URL") 
+REDIS_URL = os.getenv("REDIS_URL")
+# --- ДОБАВЛЕНО: Загружаем URL фронтенда ---
+FRONTEND_URL = os.getenv("FRONTEND_URL")
 
 app = FastAPI(title="Feed Reader API")
 
 @app.on_event("startup")
 async def on_startup():
     await create_db()
-    # --- 3. ИНИЦИАЛИЗАЦИЯ КЭША ПРИ СТАРТЕ ---
     if REDIS_URL:
-        # Убедимся, что URL корректен для aioredis
         redis_client = aioredis.from_url(REDIS_URL, encoding="utf8", decode_responses=True)
         FastAPICache.init(RedisBackend(redis_client), prefix="fastapi-cache")
         print("FastAPI-Cache with Redis backend is initialized.")
 
-# Настройка CORS
-origins = [
-    "https://frontend-app-production-c1ed.up.railway.app",
-    "http://localhost",
-    "http://127.0.0.1",
-]
+# --- ИЗМЕНЕНО: Более безопасная настройка CORS ---
+# Для продакшена разрешаем только конкретный URL фронтенда
+origins = []
+if FRONTEND_URL:
+    origins.append(FRONTEND_URL)
+else:
+    # Для локальной разработки оставляем localhost
+    origins.extend([
+        "http://localhost",
+        "http://127.0.0.1",
+        "http://localhost:5173", # Стандартный порт Vite
+    ])
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["GET"], # Оставляем только GET, так как других методов нет
+    allow_methods=["GET"],
     allow_headers=["Authorization"],
 )
 
@@ -71,21 +78,22 @@ def is_valid_tma_data(init_data: str) -> dict | None:
     except Exception:
         return None
 
-# Единственный, правильный эндпоинт
+# --- ИЗМЕНЕНО: Добавлена валидация для 'page' ---
 @app.get("/api/feed/", response_model=schemas.FeedResponse)
 @cache(expire=120)
 async def get_feed_for_user(
     session: AsyncSession = Depends(get_db_session),
-    page: int = 1,
+    # page должен быть целым числом, > 0. По умолчанию 1.
+    page: int = Query(1, gt=0),
     authorization: str | None = Header(None)
 ):
-    
+
     if authorization is None or not authorization.startswith("tma "):
         raise HTTPException(status_code=401, detail="Not authorized")
 
     init_data = authorization.split(" ", 1)[1]
     validated_data = is_valid_tma_data(init_data)
-    
+
     if validated_data is None:
         raise HTTPException(status_code=403, detail="Invalid hash")
 
@@ -94,27 +102,27 @@ async def get_feed_for_user(
         user_id = user_info['id']
     except (KeyError, json.JSONDecodeError):
         raise HTTPException(status_code=403, detail="Invalid user data in initData")
-    
-    
-    
+
     limit = 20
     offset = (page - 1) * limit
     feed = await db.get_user_feed(session=session, user_id=user_id, limit=limit, offset=offset)
 
     status = "ok"
-    if len(feed) < limit and page > 1:
-        # Сначала проверяем, существует ли уже заявка
-        request_exists = await db.check_backfill_request_exists(session, user_id)
-        
-        if not request_exists:
-            # И только если заявки нет, создаем новую
-            logging.info(f"Посты для пользователя {user_id} заканчиваются. Создаю заявку на дозагрузку.")
-            await db.create_backfill_request(session, user_id)
-        else:
-            # Если заявка уже есть, просто сообщаем об этом в лог
-            logging.info(f"Заявка на дозагрузку для пользователя {user_id} уже существует. Ожидаем выполнения.")
+    if len(feed) < limit:
+        # Теперь, если постов меньше лимита, это может быть конец ленты или начало дозагрузки.
+        # Чтобы не создавать заявку каждый раз, когда пользователь доходит до конца,
+        # проверяем, есть ли посты вообще. Если постов 0, то это может быть новый пользователь,
+        # и заявка на дозагрузку ему не нужна (она создается при прокрутке).
+        if page > 1:
+            request_exists = await db.check_backfill_request_exists(session, user_id)
+            if not request_exists:
+                logging.info(f"Посты для пользователя {user_id} заканчиваются. Создаю заявку на дозагрузку.")
+                await db.create_backfill_request(session, user_id)
+            else:
+                logging.info(f"Заявка на дозагрузку для пользователя {user_id} уже существует.")
+            status = "backfilling"
+        elif page == 1 and not feed:
+             status = "empty"
 
-        # В любом случае сообщаем фронтенду, что идет дозагрузка
-        status = "backfilling"
 
     return {"posts": feed, "status": status}

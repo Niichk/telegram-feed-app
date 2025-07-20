@@ -1,6 +1,43 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, Component } from 'react'; 
 
 // --- Вспомогательные компоненты ---
+
+
+class ErrorBoundary extends Component {
+    constructor(props) {
+        super(props);
+        this.state = { hasError: false, error: null };
+    }
+
+    static getDerivedStateFromError(error) {
+        // Обновляем состояние, чтобы следующий рендер показал запасной UI.
+        return { hasError: true, error: error };
+    }
+
+    componentDidCatch(error, errorInfo) {
+        // Можно также логировать ошибку в сервис аналитики
+        console.error("ErrorBoundary caught an error", error, errorInfo);
+    }
+
+    render() {
+        if (this.state.hasError) {
+            // Можно отрендерить любой кастомный UI
+            return (
+                <div className="post-card">
+                    <div className="post-content" style={{ textAlign: 'center' }}>
+                        <p>🤕</p>
+                        <p>Произошла ошибка при отображении этого поста.</p>
+                        <button onClick={() => this.setState({ hasError: false, error: null })} className="comment-button">
+                            Попробовать снова
+                        </button>
+                    </div>
+                </div>
+            );
+        }
+
+        return this.props.children;
+    }
+}
 
 const PostCard = React.memo(({ post }) => {
     const formatDate = (dateString) => new Date(dateString).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
@@ -407,21 +444,23 @@ function App() {
     return (
         <>
             <Header onRefresh={handleRefresh} onScrollUp={scrollToTop} />
-            
-            {/* Индикатор pull-to-refresh */}
             <div id="refresh-indicator" className="pull-to-refresh-indicator">
                 <RadialLoader />
             </div>
-
             <div className="feed-container">
-                {posts.map(post => <PostCard key={`${post.channel.id}-${post.message_id}`} post={post} />)}
-                
+                {/* --- ИЗМЕНЕНО: Оборачиваем каждый пост в ErrorBoundary --- */}
+                {posts.map(post => (
+                    <ErrorBoundary key={`${post.channel.id}-${post.message_id}`}>
+                        <PostCard post={post} />
+                    </ErrorBoundary>
+                ))}
+
                 {isFetching && !initialLoading && (
                     <div className="loader-container">
                         <RadialLoader />
                     </div>
                 )}
-                
+
                 {isBackfilling && (
                     <div className="status-message">
                         Догружаем старые посты... ⏳<br/><small>Потяните, чтобы обновить.</small>

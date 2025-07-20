@@ -1,7 +1,7 @@
 from aiogram import Router, types, F
 from sqlalchemy.ext.asyncio import AsyncSession
 from database.requests import add_subscription
-from worker import fetch_posts_for_channel, upload_avatar_to_s3, client 
+from worker import fetch_posts_for_channel, upload_avatar_to_s3, client
 import logging
 from asyncio import Lock
 
@@ -26,16 +26,17 @@ async def handle_forwarded_message(message: types.Message, session: AsyncSession
         channel_forward = message.forward_from_chat
 
         # Шаг 1: Пытаемся добавить подписку
+        # --- ИЗМЕНЕНО: Больше не передаем личные данные ---
         response_message, new_channel_obj = await add_subscription(
             session=session,
             user_id=user.id,
-            user_fn=user.first_name,
-            user_un=user.username or "",
+            # user_fn=user.first_name, # УДАЛЕНО
+            # user_un=user.username or "", # УДАЛЕНО
             channel_id=channel_forward.id,
             channel_title=channel_forward.title or "",
             channel_un=channel_forward.username or ""
         )
-        
+
         # Шаг 2: Отправляем пользователю ответ (либо "успешно", либо "уже подписаны")
         await message.answer(response_message)
 
@@ -51,7 +52,7 @@ async def handle_forwarded_message(message: types.Message, session: AsyncSession
 
             entity_identifier = new_channel_obj.username or new_channel_obj.id
             channel_entity = await client.get_entity(entity_identifier)
-            
+
             avatar_url = await upload_avatar_to_s3(channel_entity)
             if avatar_url:
                 await session.merge(new_channel_obj)
@@ -59,14 +60,13 @@ async def handle_forwarded_message(message: types.Message, session: AsyncSession
                 await session.commit()
 
             await fetch_posts_for_channel(channel=new_channel_obj, db_session=session, post_limit=20)
-            
+
             await message.answer(f"👍 Готово! Последние посты из «{new_channel_obj.title}» добавлены в вашу ленту.")
 
         except ValueError as e:
             logging.error(f"Не удалось получить доступ к каналу {new_channel_obj.id}: {e}")
             await message.answer(
                 f"❌ **Не удалось получить доступ к каналу «{new_channel_obj.title}».**\n\n"
-                f"Скорее всего, это частный канал. Чтобы я мог читать из него посты, "
-                f"мой рабочий аккаунт должен быть добавлен в этот канал как участник.",
+                f"Скорее всего, это частный канал.",
                 parse_mode="Markdown"
             )
