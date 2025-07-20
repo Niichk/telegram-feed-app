@@ -40,20 +40,21 @@ origins = []
 if FRONTEND_URL:
     origins.append(FRONTEND_URL)
 else:
-    origins.extend([
-        "http://localhost",
-        "http://127.0.0.1",
-        "http://localhost:5173",
-    ])
+    origins = [
+    "https://telegram-feed-app-production.up.railway.app",
+    "https://*.railway.app",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost",
+    "http://127.0.0.1",
+]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    # --- ИСПРАВЛЕНИЕ: Разрешаем методы GET и OPTIONS ---
-    allow_methods=["GET", "OPTIONS"],
-    # Можно также использовать ["*"] для разрешения всех стандартных методов
-    allow_headers=["Authorization"],
+    allow_origins=["*"],  # ВРЕМЕННО: разрешаем все источники для отладки
+    allow_credentials=False,  # ИСПРАВЛЕНИЕ: убираем credentials для "*" origins
+    allow_methods=["GET", "POST", "OPTIONS"],  # ИСПРАВЛЕНИЕ: явно разрешаем OPTIONS
+    allow_headers=["*"],  # ИСПРАВЛЕНИЕ: разрешаем все заголовки
 )
 
 async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
@@ -78,24 +79,31 @@ def is_valid_tma_data(init_data: str) -> dict | None:
 
 @app.get("/api/feed/", response_model=schemas.FeedResponse)
 @cache(expire=120)
-async def get_feed_for_user(
+async def get_feed_for_user(  # ИСПРАВЛЕНИЕ: убираем @cache временно
     session: AsyncSession = Depends(get_db_session),
     page: int = Query(1, gt=0),
     authorization: str | None = Header(None)
 ):
+    # ДОБАВЛЕНИЕ: логирование для отладки
+    logging.info(f"Получен запрос на feed, page={page}, auth={'есть' if authorization else 'нет'}")
+    
     if authorization is None or not authorization.startswith("tma "):
+        logging.warning(f"Неверная авторизация: {authorization}")
         raise HTTPException(status_code=401, detail="Not authorized")
 
     init_data = authorization.split(" ", 1)[1]
     validated_data = is_valid_tma_data(init_data)
 
     if validated_data is None:
+        logging.warning("Невалидные TMA данные")
         raise HTTPException(status_code=403, detail="Invalid hash")
 
     try:
         user_info = json.loads(validated_data['user'])
         user_id = user_info['id']
+        logging.info(f"Пользователь определен: {user_id}")
     except (KeyError, json.JSONDecodeError):
+        logging.error("Ошибка парсинга данных пользователя")
         raise HTTPException(status_code=403, detail="Invalid user data in initData")
 
     limit = 20
@@ -115,4 +123,10 @@ async def get_feed_for_user(
         elif page == 1 and not feed:
              status = "empty"
 
+    logging.info(f"Возвращаю {len(feed)} постов, статус: {status}")
     return {"posts": feed, "status": status}
+
+# ДОБАВЛЕНИЕ: отдельный endpoint для проверки health
+@app.get("/health")
+async def health_check():
+    return {"status": "ok", "message": "API работает"}
