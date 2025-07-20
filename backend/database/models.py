@@ -45,10 +45,9 @@ class Subscription(Base):
     # Аудит
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     
+    # ИСПРАВЛЕНИЕ: правильные ограничения для Subscription
     __table_args__ = (
-        UniqueConstraint('channel_id', 'message_id', name='_channel_message_uc'),
-        Index('ix_posts_channel_date', 'channel_id', 'date'),
-        Index('ix_posts_date_desc', 'date', postgresql_ops={'date': 'DESC'}),
+        UniqueConstraint('user_id', 'channel_id', name='_user_channel_subscription_uc'),
     )
 
 class Post(Base):
@@ -78,6 +77,7 @@ class Post(Base):
     # Relationships
     channel: Mapped["Channel"] = relationship(back_populates="posts")
     
+    # ПРАВИЛЬНЫЕ ограничения для Post
     __table_args__ = (
         UniqueConstraint('channel_id', 'message_id', name='_channel_message_uc'),
         Index('ix_posts_channel_date', 'channel_id', 'date'),
