@@ -297,6 +297,7 @@ function App() {
     const [isFetching, setIsFetching] = useState(false);
     const [initialLoading, setInitialLoading] = useState(true);
     const [isBackfilling, setIsBackfilling] = useState(false);
+    const [hasSubscriptions, setHasSubscriptions] = useState(false);
     
     const page = useRef(1);
     const loader = useRef(null);
@@ -310,6 +311,28 @@ function App() {
         const existingIds = new Set(existingPosts.map(p => `${p.channel.id}-${p.message_id}`));
         const uniqueNewPosts = newPosts.filter(p => !existingIds.has(`${p.channel.id}-${p.message_id}`));
         return [...existingPosts, ...uniqueNewPosts];
+    }, []);
+
+    const checkSubscriptions = useCallback(async () => {
+        try {
+            const response = await fetch(
+                // Убедись, что URL правильный для твоего деплоя
+                `https://telegram-feed-app-production.up.railway.app/api/subscriptions/`, 
+                {
+                    headers: { 'Authorization': `tma ${window.Telegram.WebApp.initData}` }
+                }
+            );
+            if (response.ok) {
+                const data = await response.json();
+                // Если массив каналов не пустой, обновляем состояние
+                if (data.channels && data.channels.length > 0) {
+                    setHasSubscriptions(true);
+                }
+            }
+        } catch (err) {
+            // В случае ошибки просто выводим ее в консоль, чтобы не ломать приложение
+            console.error("Failed to check subscriptions:", err);
+        }
     }, []);
 
     const fetchPosts = useCallback(async (isRefresh = false) => {
@@ -402,7 +425,12 @@ function App() {
         const tg = window.Telegram.WebApp;
         const init = () => {
             if (tg && tg.initData) {
-                fetchPosts().finally(() => setInitialLoading(false));
+                
+                // fetchPosts().finally(() => setInitialLoading(false));
+
+                checkSubscriptions(); // Проверяем подписки
+                fetchPosts();       // Начинаем загрузку постов
+                
             } else {
                 setError("Не удалось определить пользователя Telegram. Откройте приложение через бота.");
                 setInitialLoading(false);
@@ -517,9 +545,23 @@ function App() {
         return <div className="status-message">Ошибка: {error}</div>;
     }
     
-    if (posts.length === 0 && !isFetching) {
-        return <div className="status-message">Ваша лента пока пуста. Добавьте каналы через бота!</div>;
+    if (posts.length === 0 && !isFetching && !initialLoading) {
+        if (hasSubscriptions) {
+            // Если постов нет, но мы знаем, что подписки есть, показываем скелетоны
+            return (
+                <>
+                    <Header onRefresh={handleRefresh} onScrollUp={scrollToTop} />
+                    <div className="feed-container">
+                        {[...Array(3)].map((_, i) => <SkeletonCard key={i} />)}
+                    </div>
+                </>
+            );
+        } else {
+            // А если и подписок нет, то показываем сообщение
+            return <div className="status-message">Ваша лента пока пуста. Добавьте каналы через бота!</div>;
+        }
     }
+    // ----------------------
 
     return (
         <>

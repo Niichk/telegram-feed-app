@@ -90,6 +90,32 @@ def is_valid_tma_data(init_data: str) -> dict | None:
     except Exception:
         return None
 
+
+@app.get("/api/subscriptions/", response_model=schemas.SubscriptionResponse)
+@limiter.limit("30/minute")
+async def get_user_subscriptions_api(
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    authorization: str | None = Header(None)
+):
+    if authorization is None or not authorization.startswith("tma "):
+        raise HTTPException(status_code=401, detail="Not authorized")
+
+    init_data = authorization.split(" ", 1)[1]
+    validated_data = is_valid_tma_data(init_data)
+
+    if validated_data is None:
+        raise HTTPException(status_code=403, detail="Invalid hash")
+
+    try:
+        user_info = json.loads(validated_data['user'])
+        user_id = user_info['id']
+    except (KeyError, json.JSONDecodeError):
+        raise HTTPException(status_code=403, detail="Invalid user data in initData")
+
+    subscriptions = await db.get_user_subscriptions(session, user_id)
+    return {"channels": subscriptions}
+
 @app.get("/api/feed/", response_model=schemas.FeedResponse)
 @cache(expire=120)
 @limiter.limit("30/minute")
