@@ -93,7 +93,7 @@ def process_text(raw_text: str | None, entities=None) -> str | None:
             linked_text = bleach.linkify(
                 escape(raw_text),
                 parse_email=False,
-                callbacks=[lambda attrs, new: {**attrs, 'target': '_blank', 'rel': 'noopener noreferrer'}]
+                callbacks=[lambda attrs, new: {**attrs, 'target': '_blank', 'rel': 'noopener noreferrer'}] # type: ignore
             )
             return linked_text.replace('\n', '<br>')
 
