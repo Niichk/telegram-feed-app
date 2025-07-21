@@ -78,45 +78,73 @@ worker_stats = {
     'errors': 0
 }
 
-def process_text(text: str | None) -> str | None:
-    """Полный цикл обработки текста: markdown -> html -> sanitize -> linkify."""
+def process_telegram_entities(text: str, entities) -> str:
+    """Обрабатывает Telegram entities (ссылки, форматирование) в правильном порядке"""
+    if not entities:
+        return text
+    
+    # Сортируем entities по убыванию offset для корректной замены
+    sorted_entities = sorted(entities, key=lambda e: e.offset, reverse=True)
+    
+    result = text
+    for entity in sorted_entities:
+        start = entity.offset
+        end = entity.offset + entity.length
+        entity_text = result[start:end]
+        
+        if hasattr(entity, 'url') and entity.url:
+            # Текстовая ссылка (гиперссылка) - это то что нам нужно!
+            replacement = f'<a href="{entity.url}" target="_blank" rel="noopener noreferrer">{entity_text}</a>'
+            result = result[:start] + replacement + result[end:]
+        elif entity.__class__.__name__ == 'MessageEntityUrl':
+            # Обычная URL ссылка
+            url = entity_text
+            if not url.startswith(('http://', 'https://')):
+                url = 'https://' + url
+            replacement = f'<a href="{url}" target="_blank" rel="noopener noreferrer">{entity_text}</a>'
+            result = result[:start] + replacement + result[end:]
+        elif entity.__class__.__name__ == 'MessageEntityBold':
+            replacement = f'<b>{entity_text}</b>'
+            result = result[:start] + replacement + result[end:]
+        elif entity.__class__.__name__ == 'MessageEntityItalic':
+            replacement = f'<i>{entity_text}</i>'
+            result = result[:start] + replacement + result[end:]
+        elif entity.__class__.__name__ == 'MessageEntityCode':
+            replacement = f'<code>{entity_text}</code>'
+            result = result[:start] + replacement + result[end:]
+        elif entity.__class__.__name__ == 'MessageEntityPre':
+            replacement = f'<pre>{entity_text}</pre>'
+            result = result[:start] + replacement + result[end:]
+    
+    return result
+
+def process_text(text: str | None, entities=None) -> str | None:
+    """Полный цикл обработки текста с учетом Telegram entities"""
     if not text:
         return None
     
     try:
-        # ИСПРАВЛЕНИЕ: Сначала проверяем, есть ли уже HTML-теги в тексте
-        if '<a href=' in text and '</a>' in text:
-            # Текст уже содержит готовые HTML ссылки от Telegram
-            # Просто очищаем от XSS и возвращаем
-            safe_html = bleach.clean(
-                text,
-                tags=ALLOWED_TAGS + ['a'],  # Разрешаем теги ссылок
-                attributes={'a': ['href', 'target', 'rel']},  # Разрешаем атрибуты ссылок
-                strip=False
-            )
-            return safe_html
+        # ГЛАВНОЕ ИСПРАВЛЕНИЕ: Сначала обрабатываем Telegram entities
+        if entities:
+            processed_text = process_telegram_entities(text, entities)
+        else:
+            processed_text = text
         
-        # Если готовых HTML ссылок нет - обрабатываем как обычно
-        html = md.renderInline(text)
-        
-        # Улучшенная обработка ссылок только для plain text
+        # Затем обрабатываем оставшиеся ссылки (если entities не покрыли все)
         import re
-        
-        # Более точный regex для поиска URL
-        url_pattern = r'(https?://[^\s<>"\'()]+(?:\([^\s<>"\'()]*\))*[^\s<>"\'().,;:]|www\.[^\s<>"\'()]+(?:\([^\s<>"\'()]*\))*[^\s<>"\'().,;:])'
+        url_pattern = r'(?<!href=")(?<!href=\')(?<!<a [^>]*>)(https?://[^\s<>"\'()]+|www\.[^\s<>"\'()]+)(?![^<]*</a>)'
         
         def replace_url(match):
-            url = match.group(1)
+            url = match.group(0)
             original_url = url
             
-            # Добавляем протокол для www ссылок
             if not url.startswith(('http://', 'https://')):
                 url = 'https://' + url
             
             return f'<a href="{url}" target="_blank" rel="noopener noreferrer">{original_url}</a>'
         
-        # Применяем замену URL только если это не HTML уже
-        html_with_links = re.sub(url_pattern, replace_url, html)
+        # Применяем только если ссылка еще не в теге <a>
+        html_with_links = re.sub(url_pattern, replace_url, processed_text)
         
         # Очищаем получившийся HTML для защиты от XSS
         safe_html = bleach.clean(
@@ -131,7 +159,7 @@ def process_text(text: str | None) -> str | None:
     except Exception as e:
         logging.error(f"Ошибка обработки текста: {e}")
         # Fallback: просто очищаем от XSS
-        return bleach.clean(text, tags=ALLOWED_TAGS + ['a'], attributes={'a': ['href', 'target', 'rel']})
+        return bleach.clean(text, tags=ALLOWED_TAGS, attributes={})
     
 async def save_single_post(db_session: AsyncSession, post: Post, channel_title: str):
     """Сохраняет один пост немедленно"""
@@ -389,7 +417,8 @@ async def process_grouped_messages(grouped_messages, channel_id_for_log, db_sess
             logging.warning(f"Не удалось получить entity для репоста в альбоме: {e}")
             forward_data = {"from_name": "Недоступный источник", "username": None, "channel_id": None}
 
-    processed_text = process_text(main_message.text)
+    processed_text = process_text(main_message.text, main_message.entities)
+    
     new_post = Post(
         channel_id=channel_id_for_log,
         message_id=main_message.id,
@@ -406,13 +435,6 @@ async def process_grouped_messages(grouped_messages, channel_id_for_log, db_sess
 async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, post_limit: int = 10, offset_id: int = 0, real_time_save: bool = False):
     """
     Получает посты из канала и сохраняет их в базу данных.
-    
-    Args:
-        channel: Объект канала из базы данных
-        db_session: Сессия базы данных
-        post_limit: Лимит постов для загрузки
-        offset_id: ID сообщения для offset (для пагинации)
-        real_time_save: Флаг для сохранения постов в реальном времени
     """
     channel_id_for_log = channel.id
     channel_title_for_log = channel.title
@@ -469,8 +491,8 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                     existing_post.reactions = new_reactions
                     needs_update = True
                 
-                # Проверка текста
-                new_text = process_text(message.text)
+                # ИСПРАВЛЕНИЕ: Проверка текста с entities
+                new_text = process_text(message.text, message.entities)
                 if existing_post.text != (new_text if new_text is not None else ""):
                     existing_post.text = new_text if new_text is not None else ""
                     needs_update = True
@@ -479,8 +501,8 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                     updated_posts.append(existing_post)
 
             else:
-                # Создаем новый пост
-                processed_text = process_text(message.text)
+                # ИСПРАВЛЕНИЕ: Создаем новый пост с entities
+                processed_text = process_text(message.text, message.entities)
                 media_item = await upload_media_to_s3(message, channel_id_for_log)
                 
                 # Обработка реакций
