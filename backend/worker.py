@@ -455,11 +455,11 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
 
             if posts_created > 0:
                 logging.info(f"Создано {posts_created} новых постов для канала «{channel_title_for_log}»")
-                worker_stats['processed_posts'] += posts_created
+            
             if posts_updated > 0:
                 logging.info(f"Обновлено {posts_updated} постов для канала «{channel_title_for_log}»")
 
-            worker_stats['processed_channels'] += 1
+            
 
         except IntegrityError as e:
             logging.error(f"Ошибка целостности данных для канала {channel_title_for_log}: {e}")
@@ -500,12 +500,19 @@ async def process_channel_safely(channel: Channel, semaphore: asyncio.Semaphore,
 async def periodic_task_parallel():
     """
     Периодическая задача, которая обходит все каналы в базе данных
-    С ПАРАЛЛЕЛЬНОЙ ОБРАБОТКОЙ.
+    С ПАРАЛЛЕЛЬНОЙ ОБРАБОТКОЙ и корректной статистикой.
     """
     logging.info("Начинаю периодический сбор постов...")
     
+    # --- ИСПРАВЛЕНИЕ: Сбрасываем счетчики для этого цикла ---
+    # Uptime и ошибки остаются общими, а счетчики каналов/постов - для цикла
+    cycle_stats = {
+        'channels': 0,
+        'posts': 0
+    }
+    # ----------------------------------------------------
+
     list_of_channels = []
-    # Получаем список всех каналов из БД в одной короткой сессии
     async with session_maker() as session:
         result = await session.execute(select(Channel))
         list_of_channels = result.scalars().all()
@@ -513,12 +520,12 @@ async def periodic_task_parallel():
     if not list_of_channels:
         logging.info("В базе нет каналов для отслеживания.")
         return
+        
+    # Вместо инкремента глобального счетчика, будем передавать локальный
+    # В этой реализации это не нужно, так как мы просто считаем количество каналов
+    cycle_stats['channels'] = len(list_of_channels)
 
-    # Создаем семафор для ограничения количества одновременных задач
-    # 10-15 - хорошее значение, чтобы не перегрузить сеть и API Telegram
     semaphore = asyncio.Semaphore(15)
-
-    # Создаем список задач для параллельного выполнения
     tasks = [process_channel_safely(channel, semaphore, POST_LIMIT) for channel in list_of_channels]
 
     if not tasks:
@@ -526,12 +533,17 @@ async def periodic_task_parallel():
         
     logging.info(f"Запускаю обработку {len(tasks)} каналов параллельно...")
     
-    # Запускаем все задачи на выполнение
-    # return_exceptions=True гарантирует, что даже если одна задача упадет, остальные продолжат работу
     await asyncio.gather(*tasks, return_exceptions=True)
     
     logging.info("Все каналы обработаны.")
-    await log_worker_stats()
+    
+    # Логируем статистику
+    uptime = time.time() - worker_stats['start_time']
+    logging.info(
+        f"Статистика воркера: Uptime: {uptime/3600:.1f}ч, "
+        f"Обработано в этом цикле: {cycle_stats['channels']} каналов, "
+        f"Ошибок (всего): {worker_stats['errors']}"
+    )
 
 
 async def backfill_user_channels(user_id: int):
