@@ -81,8 +81,9 @@ worker_stats = {
 
 def process_text(raw_text: str | None, entities=None) -> str | None:
     """
-    Надежно преобразует сырой текст и entities из Telegram в безопасный HTML.
-    Использует алгоритм сборки по частям для максимальной надежности.
+    Финальная, наиболее надежная версия.
+    Преобразует сырой текст и entities в безопасный HTML,
+    корректно обрабатывая ссылки с пустым URL.
     """
     if not raw_text:
         return None
@@ -92,7 +93,7 @@ def process_text(raw_text: str | None, entities=None) -> str | None:
             linked_text = bleach.linkify(
                 escape(raw_text),
                 parse_email=False,
-                callbacks=[lambda attrs, new: {**attrs, 'target': '_blank', 'rel': 'noopener noreferrer'}] # type: ignore
+                callbacks=[lambda attrs, new: {**attrs, 'target': '_blank', 'rel': 'noopener noreferrer'}]
             )
             return linked_text.replace('\n', '<br>')
 
@@ -112,7 +113,9 @@ def process_text(raw_text: str | None, entities=None) -> str | None:
             replacement = escaped_part
             entity_type = entity.__class__.__name__
             
-            if entity_type == 'MessageEntityTextLink' and hasattr(entity, 'url'):
+            # --- ВОТ ОНО, КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ ---
+            # Мы проверяем не только наличие 'url', но и то, что он не пустой (if entity.url)
+            if entity_type == 'MessageEntityTextLink' and hasattr(entity, 'url') and entity.url:
                 url = escape(entity.url, quote=True)
                 replacement = f'<a href="{url}" target="_blank" rel="noopener noreferrer">{escaped_part}</a>'
             elif entity_type == 'MessageEntityUrl':
