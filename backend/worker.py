@@ -22,6 +22,15 @@ from linkify_it import LinkifyIt
 from PIL import Image
 from html import escape
 
+# --- НАСТРОЙКА КОНВЕРТЕРА MARKDOWN -> HTML (ВСТАВИТЬ ПОСЛЕ ИМПОРТОВ) ---
+# Создаем экземпляр конвертера с настройками, которые нам нужны.
+# commonmark - стандартный markdown
+# {'breaks': True, 'html': False, 'linkify': True} - настройки:
+#   - breaks: True -> Превращать переносы строк в <br>
+#   - html: False -> Не пропускать сырой HTML из текста (для безопасности)
+#   - linkify: True -> Автоматически превращать текстовые ссылки в кликабельные
+md_parser = MarkdownIt('commonmark', {'breaks': True, 'html': False, 'linkify': True})
+
 # Настройка
 load_dotenv()
 DB_URL_FOR_LOG = os.getenv("DATABASE_URL")
@@ -79,80 +88,39 @@ worker_stats = {
     'errors': 0
 }
 
-def process_text(raw_text: str | None, entities=None) -> str | None:
+def process_text(message_text: str | None) -> str | None:
     """
-    Финальная, наиболее надежная версия.
-    Преобразует сырой текст и entities в безопасный HTML,
-    корректно обрабатывая ссылки с пустым URL.
+    Принимает текст сообщения из Telethon (который уже в формате Markdown),
+    конвертирует его в HTML с помощью markdown-it-py и затем очищает
+    с помощью bleach для максимальной безопасности.
     """
-    if not raw_text:
+    if not message_text:
         return None
 
     try:
-        if not entities:
-            linked_text = bleach.linkify(
-                escape(raw_text),
-                parse_email=False,
-                callbacks=[lambda attrs, new: {**attrs, 'target': '_blank', 'rel': 'noopener noreferrer'}] # type: ignore
-            )
-            return linked_text.replace('\n', '<br>')
+        # 1. Конвертируем Markdown в HTML. Библиотека сама найдет ссылки.
+        html_from_markdown = md_parser.render(message_text)
 
-        sorted_entities = sorted(entities, key=lambda e: e.offset)
-        result_parts = []
-        last_offset = 0
+        # 2. Очищаем полученный HTML, разрешая только безопасные теги.
+        # Это защитит от любых вредоносных вставок.
+        ALLOWED_TAGS = ['a', 'b', 'strong', 'i', 'em', 'pre', 'code', 'br', 's', 'u', 'blockquote']
+        ALLOWED_ATTRIBUTES = {'a': ['href', 'title', 'target', 'rel']}
+        
+        safe_html = bleach.clean(
+            html_from_markdown,
+            tags=ALLOWED_TAGS,
+            attributes=ALLOWED_ATTRIBUTES,
+            strip=False
+        )
 
-        for entity in sorted_entities:
-            if entity.offset > last_offset:
-                result_parts.append(escape(raw_text[last_offset:entity.offset]))
+        # 3. Добавляем к ссылкам target="_blank", чтобы они открывались в новой вкладке.
+        # Bleach не умеет это делать сам, поэтому используем простое добавление.
+        return safe_html.replace('<a href', '<a target="_blank" rel="noopener noreferrer" href')
 
-            start = entity.offset
-            end = entity.offset + entity.length
-            original_part = raw_text[start:end]
-            escaped_part = escape(original_part)
-            
-            replacement = escaped_part
-            entity_type = entity.__class__.__name__
-            
-            # --- ВОТ ОНО, КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ ---
-            # Мы проверяем не только наличие 'url', но и то, что он не пустой (if entity.url)
-            if entity_type == 'MessageEntityTextLink' and hasattr(entity, 'url') and entity.url:
-                url = escape(entity.url, quote=True)
-                replacement = f'<a href="{url}" target="_blank" rel="noopener noreferrer">{escaped_part}</a>'
-            elif entity_type == 'MessageEntityUrl':
-                url = original_part
-                if '://' not in url:
-                    url = 'https://' + url
-                url = escape(url, quote=True)
-                replacement = f'<a href="{url}" target="_blank" rel="noopener noreferrer">{escaped_part}</a>'
-            elif entity_type == 'MessageEntityBold':
-                replacement = f'<b>{escaped_part}</b>'
-            elif entity_type == 'MessageEntityItalic':
-                replacement = f'<i>{escaped_part}</i>'
-            elif entity_type == 'MessageEntitySpoiler':
-                replacement = f'<tg-spoiler>{escaped_part}</tg-spoiler>'
-            elif entity_type == 'MessageEntityCode':
-                replacement = f'<code>{escaped_part}</code>'
-            elif entity_type == 'MessageEntityPre':
-                replacement = f'<pre>{escaped_part}</pre>'
-            elif entity_type == 'MessageEntityUnderline':
-                replacement = f'<u>{escaped_part}</u>'
-            elif entity_type == 'MessageEntityStrikethrough':
-                replacement = f'<s>{escaped_part}</s>'
-            elif entity_type == 'MessageEntityBlockquote':
-                 replacement = f'<blockquote>{escaped_part.replace(chr(10), "<br>")}</blockquote>'
-            
-            result_parts.append(replacement)
-            last_offset = end
-
-        if last_offset < len(raw_text):
-            result_parts.append(escape(raw_text[last_offset:]))
-            
-        final_html = "".join(result_parts)
-        return final_html.replace('\n', '<br>')
-    
     except Exception as e:
-        logging.error(f"Критическая ошибка обработки текста: {e}", exc_info=True)
-        return escape(raw_text).replace('\n', '<br>')
+        logging.error(f"Критическая ошибка конвертации Markdown: {e}", exc_info=True)
+        # В случае сбоя, возвращаем безопасный, экранированный текст.
+        return escape(message_text).replace('\n', '<br>')
     
 async def save_single_post(db_session: AsyncSession, post: Post, channel_title: str):
     """Сохраняет один пост немедленно"""
@@ -410,7 +378,7 @@ async def process_grouped_messages(grouped_messages, channel_id_for_log, db_sess
             logging.warning(f"Не удалось получить entity для репоста в альбоме: {e}")
             forward_data = {"from_name": "Недоступный источник", "username": None, "channel_id": None}
 
-    processed_text = process_text(main_message.raw_text, main_message.entities)
+    processed_text = process_text(main_message.text)
     
     new_post = Post(
         channel_id=channel_id_for_log,
@@ -485,7 +453,7 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                     needs_update = True
                 
                 # ИСПРАВЛЕНИЕ: Проверка текста с entities
-                new_text = process_text(message.raw_text, message.entities)
+                new_text = process_text(message.text)
                 if existing_post.text != (new_text if new_text is not None else ""):
                     existing_post.text = new_text if new_text is not None else ""
                     needs_update = True
@@ -495,7 +463,7 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
 
             else:
                 # ИСПРАВЛЕНИЕ: Создаем новый пост с entities
-                processed_text = process_text(message.raw_text, message.entities)
+                processed_text = process_text(message.text)
                 media_item = await upload_media_to_s3(message, channel_id_for_log)
                 
                 # Обработка реакций
