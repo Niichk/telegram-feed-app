@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, Component } from 'react'; 
 
-// --- Вспомогательные компоненты ---
-
+// --- Вспомогательные компоненты --- (без изменений)
 class ErrorBoundary extends Component {
     constructor(props) {
         super(props);
@@ -9,18 +8,15 @@ class ErrorBoundary extends Component {
     }
 
     static getDerivedStateFromError(error) {
-        // Обновляем состояние, чтобы следующий рендер показал запасной UI.
         return { hasError: true, error: error };
     }
 
     componentDidCatch(error, errorInfo) {
-        // Можно также логировать ошибку в сервис аналитики
         console.error("ErrorBoundary caught an error", error, errorInfo);
     }
 
     render() {
         if (this.state.hasError) {
-            // Можно отрендерить любой кастомный UI
             return (
                 <div className="post-card">
                     <div className="post-content" style={{ textAlign: 'center' }}>
@@ -33,7 +29,6 @@ class ErrorBoundary extends Component {
                 </div>
             );
         }
-
         return this.props.children;
     }
 }
@@ -62,7 +57,6 @@ const PostCard = React.memo(({ post }) => {
 
     return (
         <div className={`post-card ${hasVisualMedia ? 'post-card-with-media' : ''}`}>
-            {/* Блок с аватаром, названием и датой */}
             <div className="post-header">
                 <a href={channelUrl} target="_blank" rel="noopener noreferrer" className="channel-link">
                     <div className="channel-avatar">
@@ -94,19 +88,15 @@ const PostCard = React.memo(({ post }) => {
                 </a>
             )}
             
-            {/* Блок с картинками/видео/аудио */}
             <PostMedia media={post.media} />
             
-            {/* Блок с текстом поста и кнопкой "Комментировать" */}
             {(post.text || postUrl) && (
                  <div className="post-content">
-                    {/* Исправленное отображение текста с HTML */}
                     {post.text && <div className="post-text" dangerouslySetInnerHTML={{ __html: post.text }} />}
                     <a href={postUrl} target="_blank" rel="noopener noreferrer" className="comment-button">Комментировать</a>
                 </div>
             )}
 
-            {/* ИСПРАВЛЕННЫЙ ФУТЕР: он должен быть здесь, внутри .post-card */}
             {(post.reactions?.length > 0 || post.views) && (
                 <div className="post-footer">
                     <div className="reactions">
@@ -118,7 +108,6 @@ const PostCard = React.memo(({ post }) => {
                         ))}
                     </div>
                     <div className="views">
-                        {/* Условное отображение просмотров */}
                         {post.views && `👁️ ${post.views}`}
                     </div>
                 </div>
@@ -187,8 +176,7 @@ const PostMedia = React.memo(({ media }) => {
                                         className="post-media-visual"
                                         preload="metadata"
                                         poster={item.thumbnail_url || undefined}
-                                        // ИСПРАВЛЕНИЕ: НЕ показываем контролы до первого клика
-                                        controls={false}  // ← Важно! Отключаем нативные контролы
+                                        controls={false}
                                         onLoadedMetadata={(e) => {
                                             if (!item.thumbnail_url) {
                                                 e.target.currentTime = 0.1;
@@ -203,17 +191,15 @@ const PostMedia = React.memo(({ media }) => {
                                         Ваш браузер не поддерживает воспроизведение видео.
                                     </video>
                                     
-                                    {/* ЕДИНСТВЕННАЯ кнопка play - показываем всегда для видео */}
                                     <div 
                                         className="video-play-overlay"
                                         onClick={(e) => {
                                             const container = e.target.closest('.video-container');
                                             const video = container.querySelector('video');
                                             
-                                            // Скрываем нашу кнопку и включаем нативные контролы
                                             e.target.style.display = 'none';
                                             if (video) {
-                                                video.controls = true;  // ← Включаем контролы после клика
+                                                video.controls = true;
                                                 video.currentTime = 0;
                                                 video.play();
                                             }
@@ -251,7 +237,6 @@ function Header({ onRefresh, onScrollUp }) {
         const button = e.currentTarget;
         button.classList.add('button--active');
         
-        // Добавляем haptic feedback для мобильных устройств
         if (window.Telegram?.WebApp?.HapticFeedback) {
             window.Telegram.WebApp.HapticFeedback.impactOccurred('light');
         }
@@ -288,8 +273,7 @@ function RadialLoader() {
   );
 }
 
-// --- Основной компонент приложения ---
-
+// --- ИСПРАВЛЕННЫЙ ОСНОВНОЙ КОМПОНЕНТ ---
 function App() {
     const [posts, setPosts] = useState([]);
     const [error, setError] = useState(null);
@@ -314,104 +298,7 @@ function App() {
         return [...existingPosts, ...uniqueNewPosts];
     }, []);
 
-    const checkSubscriptions = useCallback(async () => {
-        try {
-            const response = await fetch(
-                `https://telegram-feed-app-production.up.railway.app/api/subscriptions/`, 
-                {
-                    headers: { 'Authorization': `tma ${window.Telegram.WebApp.initData}` }
-                }
-            );
-            if (response.ok) {
-                const data = await response.json();
-                // Если массив каналов не пустой, обновляем состояние
-                if (data.channels && data.channels.length > 0) {
-                    setHasSubscriptions(true);
-                }
-            }
-        } catch (err) {
-            // В случае ошибки просто выводим ее в консоль, чтобы не ломать приложение
-            console.error("Failed to check subscriptions:", err);
-        }
-    }, []);
-
-    // ДОБАВЛЕНО: Функция для обновления статуса подписок
-    const updateSubscriptionStatus = useCallback(async () => {
-        try {
-            const response = await fetch(
-                `https://telegram-feed-app-production.up.railway.app/api/subscriptions/`, 
-                {
-                    headers: { 'Authorization': `tma ${window.Telegram.WebApp.initData}` }
-                }
-            );
-            if (response.ok) {
-                const data = await response.json();
-                const hasChannels = data.channels && data.channels.length > 0;
-                const hadSubscriptionsBefore = hasSubscriptions;
-                setHasSubscriptions(hasChannels);
-                
-                // ИСПРАВЛЕНИЕ: Если появились новые подписки - запускаем реалтайм
-                if (hasChannels && !hadSubscriptionsBefore) {
-                    startRealtimeUpdates(); // ← ДОБАВЛЕНО
-                }
-                
-                // ВАЖНО: Если есть подписки, но нет постов - запускаем загрузку
-                if (hasChannels && posts.length === 0 && !isFetching) {
-                    fetchPosts(true);
-                }
-            }
-        } catch (err) {
-            console.error("Failed to update subscription status:", err);
-        }
-    }, [posts.length, isFetching, hasSubscriptions, startRealtimeUpdates, fetchPosts]);
-
-    // ДОБАВЛЕНО: Функция для реалтайм обновлений после добавления канала
-    const startRealtimeUpdates = useCallback(() => {
-        if (!window.Telegram?.WebApp?.initDataUnsafe?.user?.id) return;
-        
-        setIsLoadingNewChannel(true);
-        
-        // Запускаем периодическую проверку новых постов
-        const checkInterval = setInterval(async () => {
-            try {
-                const response = await fetch(
-                    `https://telegram-feed-app-production.up.railway.app/api/feed/?page=1`, 
-                    {
-                        headers: { 'Authorization': `tma ${window.Telegram.WebApp.initData}` }
-                    }
-                );
-                
-                if (response.ok) {
-                    const { posts: freshPosts } = await response.json();
-                    
-                    setPosts(current => {
-                        const newUniquePosts = freshPosts.filter(newPost => 
-                            !current.some(existingPost => 
-                                existingPost.channel.id === newPost.channel.id && 
-                                existingPost.message_id === newPost.message_id
-                            )
-                        );
-                        
-                        if (newUniquePosts.length > 0) {
-                            setIsLoadingNewChannel(false);
-                            return [...newUniquePosts, ...current];
-                        }
-                        return current;
-                    });
-                }
-            } catch (err) {
-                console.error('Realtime update error:', err);
-            }
-        }, 3000); // Проверяем каждые 3 секунды
-        
-        // Останавливаем через 2 минуты
-        setTimeout(() => {
-            clearInterval(checkInterval);
-            setIsLoadingNewChannel(false);
-        }, 120000);
-        
-    }, []);
-
+    // ИСПРАВЛЕНИЕ: fetchPosts определяется ПЕРВЫМ
     const fetchPosts = useCallback(async (isRefresh = false) => {
         if (isFetchingRef.current) return;
         if (!hasMore && !isRefresh) return;
@@ -472,6 +359,52 @@ function App() {
         return () => controller.abort();
     }, [hasMore, removeDuplicates]);
 
+    const checkSubscriptions = useCallback(async () => {
+        try {
+            const response = await fetch(
+                `https://telegram-feed-app-production.up.railway.app/api/subscriptions/`, 
+                {
+                    headers: { 'Authorization': `tma ${window.Telegram.WebApp.initData}` }
+                }
+            );
+            if (response.ok) {
+                const data = await response.json();
+                if (data.channels && data.channels.length > 0) {
+                    setHasSubscriptions(true);
+                }
+            }
+        } catch (err) {
+            console.error("Failed to check subscriptions:", err);
+        }
+    }, []);
+
+    const updateSubscriptionStatus = useCallback(async () => {
+        try {
+            const response = await fetch(
+                `https://telegram-feed-app-production.up.railway.app/api/subscriptions/`, 
+                {
+                    headers: { 'Authorization': `tma ${window.Telegram.WebApp.initData}` }
+                }
+            );
+            if (response.ok) {
+                const data = await response.json();
+                const hasChannels = data.channels && data.channels.length > 0;
+                const hadSubscriptionsBefore = hasSubscriptions;
+                setHasSubscriptions(hasChannels);
+                
+                if (hasChannels && posts.length === 0 && !isFetching) {
+                    fetchPosts(true);
+                    
+                    if (!hadSubscriptionsBefore) {
+                        setIsLoadingNewChannel(true);
+                    }
+                }
+            }
+        } catch (err) {
+            console.error("Failed to update subscription status:", err);
+        }
+    }, [posts.length, isFetching, hasSubscriptions, fetchPosts]);
+
     const handleRefresh = useCallback(() => {
         if (window.Telegram?.WebApp?.HapticFeedback) {
             window.Telegram.WebApp.HapticFeedback.impactOccurred('light');
@@ -483,6 +416,7 @@ function App() {
         window.scrollTo({ top: 0, behavior: 'smooth' });
     };
 
+    // ИСПРАВЛЕНИЕ: ЕДИНСТВЕННЫЙ useEffect для инициализации
     useEffect(() => {
         const tg = window.Telegram.WebApp;
 
@@ -490,54 +424,99 @@ function App() {
             document.body.className = tg.colorScheme;
         };
 
-        applyThemeClass();
-        tg.onEvent('themeChanged', applyThemeClass);
-
-        return () => {
-            tg.offEvent('themeChanged', applyThemeClass);
-        };
-    }, []);
-
-    useEffect(() => {
-        const tg = window.Telegram.WebApp;
-        const init = () => {
+        const init = async () => {
             if (tg && tg.initData) {
-                checkSubscriptions(); // Проверяем подписки
-                fetchPosts();       // Начинаем загрузку постов
+                try {
+                    await checkSubscriptions();
+                    await fetchPosts();
+                } catch (error) {
+                    console.error('Initialization error:', error);
+                    setError("Ошибка инициализации приложения");
+                    setInitialLoading(false);
+                }
             } else {
                 setError("Не удалось определить пользователя Telegram. Откройте приложение через бота.");
                 setInitialLoading(false);
             }
         };
+        
         if (tg) {
             tg.ready();
+            applyThemeClass();
+            tg.onEvent('themeChanged', applyThemeClass);
             init();
         } else {
-             setError("Не удалось загрузить Telegram Web App API.");
-             setInitialLoading(false);
+            setError("Не удалось загрузить Telegram Web App API.");
+            setInitialLoading(false);
         }
         
-        // Очистка при размонтировании
         return () => {
             isFetchingRef.current = false;
-            if (window.refreshTimeout) {
-                clearTimeout(window.refreshTimeout);
+            if (tg) {
+                tg.offEvent('themeChanged', applyThemeClass);
             }
         };
-    }, [fetchPosts, checkSubscriptions]);
+    }, []); // ← ПУСТЫЕ зависимости!
 
-    // ДОБАВЛЕНО: Периодическая проверка подписок
+    // useEffect для реалтайм обновлений
     useEffect(() => {
-        // Проверяем подписки каждые 30 секунд если нет постов
+        if (!isLoadingNewChannel) return;
+        
+        const checkInterval = setInterval(async () => {
+            try {
+                const response = await fetch(
+                    `https://telegram-feed-app-production.up.railway.app/api/feed/?page=1`, 
+                    {
+                        headers: { 'Authorization': `tma ${window.Telegram.WebApp.initData}` }
+                    }
+                );
+                
+                if (response.ok) {
+                    const { posts: freshPosts } = await response.json();
+                    
+                    setPosts(current => {
+                        const newUniquePosts = freshPosts.filter(newPost => 
+                            !current.some(existingPost => 
+                                existingPost.channel.id === newPost.channel.id && 
+                                existingPost.message_id === newPost.message_id
+                            )
+                        );
+                        
+                        if (newUniquePosts.length > 0) {
+                            setIsLoadingNewChannel(false);
+                            return [...newUniquePosts, ...current];
+                        }
+                        return current;
+                    });
+                }
+            } catch (err) {
+                console.error('Realtime update error:', err);
+            }
+        }, 3000);
+        
+        const timeout = setTimeout(() => {
+            clearInterval(checkInterval);
+            setIsLoadingNewChannel(false);
+        }, 120000);
+        
+        return () => {
+            clearInterval(checkInterval);
+            clearTimeout(timeout);
+        };
+    }, [isLoadingNewChannel]);
+
+    // Периодическая проверка подписок
+    useEffect(() => {
         const interval = setInterval(() => {
             if (posts.length === 0 && !isFetching && !initialLoading) {
                 updateSubscriptionStatus();
             }
-        }, 30000); // 30 секунд
+        }, 30000);
 
         return () => clearInterval(interval);
     }, [posts.length, isFetching, initialLoading, updateSubscriptionStatus]);
 
+    // Pull to refresh
     useEffect(() => {
         const indicator = document.getElementById('refresh-indicator');
         if (!indicator) return;
@@ -601,6 +580,7 @@ function App() {
         };
     }, [handleRefresh]);
     
+    // Infinite scroll
     useEffect(() => {
         const handleObserver = (entities) => { 
             const target = entities[0]; 
@@ -619,7 +599,6 @@ function App() {
             <>
                 <Header onRefresh={() => {}} onScrollUp={() => {}} />
                 <div className="feed-container">
-                    {/* Рендерим несколько скелетов для имитации ленты */}
                     {[...Array(5)].map((_, i) => <SkeletonCard key={i} />)}
                 </div>
             </>
@@ -632,7 +611,6 @@ function App() {
     
     if (posts.length === 0 && !isFetching && !initialLoading) {
         if (hasSubscriptions || isLoadingNewChannel) {
-            // Показываем скелетоны если есть подписки ИЛИ идет загрузка нового канала
             return (
                 <>
                     <Header onRefresh={handleRefresh} onScrollUp={scrollToTop} />
@@ -647,7 +625,6 @@ function App() {
                 </>
             );
         } else {
-            // А если и подписок нет, то показываем сообщение
             return <div className="status-message">Ваша лента пока пуста. Добавьте каналы через бота!</div>;
         }
     }
@@ -659,7 +636,6 @@ function App() {
                 <RadialLoader />
             </div>
             <div className="feed-container">
-                {/* --- ИЗМЕНЕНО: Оборачиваем каждый пост в ErrorBoundary --- */}
                 {posts.map(post => (
                     <ErrorBoundary key={`${post.channel.id}-${post.message_id}`}>
                         <PostCard post={post} />
