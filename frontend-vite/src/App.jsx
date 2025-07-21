@@ -150,8 +150,18 @@ const PostMedia = React.memo(({ media }) => {
                                     />
                                 )
                             )}
-                            {item.type === 'video' && <video controls muted playsInline className="post-media-visual"><source src={item.url} /></video>}
-                        </div>
+                    {item.type === 'video' && 
+                        <video 
+                            controls 
+                            muted 
+                            playsInline 
+                            className="post-media-visual"
+                            poster={item.thumbnail_url} /* <-- ДОБАВЛЕНО: Атрибут для превью */
+                        >
+                            <source src={item.url} />
+                        </video>
+                    }                        
+                    </div>
                     ))}
                     {visualMedia.length > 1 && (
                         <>

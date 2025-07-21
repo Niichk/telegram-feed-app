@@ -13,10 +13,12 @@ class ReactionItem(BaseModel):
 
 class MediaItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    
+
     type: str
-    url: str  # HttpUrl если хотите валидацию
-    
+    url: str
+    # ДОБАВЛЕНО: новое опциональное поле для превью
+    thumbnail_url: Optional[str] = None
+
     @validator('type')
     def validate_media_type(cls, v):
         allowed_types = ['photo', 'video', 'audio']
