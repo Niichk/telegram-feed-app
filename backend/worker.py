@@ -185,12 +185,11 @@ async def upload_media_to_s3(message: types.Message, channel_id: int) -> dict | 
         return None
 
     try:
-        # 1. Загружаем основной медиафайл (фото, видео, аудио)
+        # 1. Загружаем основной медиафайл
         file_in_memory = io.BytesIO()
         await client.download_media(message, file=file_in_memory)
         file_in_memory.seek(0)
 
-        # Обрабатываем и загружаем основной файл
         if media_type == 'photo':
             with Image.open(file_in_memory) as im:
                 im = im.convert("RGB")
@@ -201,27 +200,26 @@ async def upload_media_to_s3(message: types.Message, channel_id: int) -> dict | 
             file_extension = '.webp'
             content_type = 'image/webp'
         else: # Для видео и аудио
-            if isinstance(message.media, types.MessageMediaDocument) and hasattr(message.media, 'document'):
-                doc = message.media.document
-                attributes = getattr(doc, 'attributes', [])
-                file_name = next((attr.file_name for attr in attributes if hasattr(attr, 'file_name')), None)
-                file_extension = os.path.splitext(file_name)[1] if file_name else '.dat'
-                content_type = getattr(doc, 'mime_type', 'application/octet-stream')
-            else:
-                logging.error(f"Media type is not MessageMediaDocument or missing 'document' attribute for message {message.id}")
-                return None
+            doc = message.media.document # type: ignore
+            attributes = getattr(doc, 'attributes', [])
+            file_name = next((attr.file_name for attr in attributes if hasattr(attr, 'file_name')), None)
+            file_extension = os.path.splitext(file_name)[1] if file_name else '.dat'
+            content_type = getattr(doc, 'mime_type', 'application/octet-stream')
 
         file_key = f"media/{channel_id}/{message.id}{file_extension}"
         s3_client.upload_fileobj(file_in_memory, S3_BUCKET_NAME, file_key, ExtraArgs={'ContentType': content_type})
         
         media_data["type"] = media_type
         media_data["url"] = f"https://{S3_BUCKET_NAME}.s3.{S3_REGION}.amazonaws.com/{file_key}"
-        logging.info(f"Загружен основной файл в S3: {file_key}")
 
-        # 2. НОВОЕ: Если это видео, ищем и загружаем для него превью
-        if media_type == 'video' and hasattr(message.media.document, 'thumbs') and message.media.document.thumbs: # type: ignore
+        # 2. ИСПРАВЛЕНИЕ: Надежно ищем и загружаем превью для видео
+        document = getattr(message.media, 'document', None)
+        if (
+            media_type == 'video'
+            and document and not isinstance(document, DocumentEmpty) # type: ignore
+            and hasattr(document, 'thumbs') and document.thumbs
+        ):
             thumb_in_memory = io.BytesIO()
-            # Скачиваем именно превью, а не весь медиафайл
             await client.download_media(message, thumb=-1, file=thumb_in_memory)
             thumb_in_memory.seek(0)
 
@@ -229,14 +227,14 @@ async def upload_media_to_s3(message: types.Message, channel_id: int) -> dict | 
                 with Image.open(thumb_in_memory) as im:
                     im = im.convert("RGB")
                     output_buffer = io.BytesIO()
-                    im.save(output_buffer, format="WEBP", quality=75) # Качество для превью можно чуть ниже
+                    im.save(output_buffer, format="WEBP", quality=75)
                     output_buffer.seek(0)
                     
                     thumb_key = f"media/{channel_id}/{message.id}_thumb.webp"
                     s3_client.upload_fileobj(output_buffer, S3_BUCKET_NAME, thumb_key, ExtraArgs={'ContentType': 'image/webp'})
                     
                     media_data["thumbnail_url"] = f"https://{S3_BUCKET_NAME}.s3.{S3_REGION}.amazonaws.com/{thumb_key}"
-                    logging.info(f"Загружено превью для видео в S3: {thumb_key}")
+                    logging.info(f"Загружено превью для видео: {thumb_key}")
 
         return media_data
 
