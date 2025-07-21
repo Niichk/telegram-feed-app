@@ -488,3 +488,39 @@ body {
             border-radius: 8px;
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
         }
+
+        tg-spoiler {
+        background-color: var(--tg-theme-hint-color);
+        color: transparent;
+        border-radius: 4px;
+        cursor: pointer;
+        padding: 0 2px;
+        transition: color 0.15s ease-in-out;
+        /* Запрещаем выделение текста внутри скрытого спойлера */
+        user-select: none;
+        -webkit-user-select: none;
+        }
+
+        /* Стиль для "открытого" спойлера */
+        tg-spoiler.revealed {
+        color: inherit;
+        background-color: transparent;
+        }
+
+        /* Стили для цитат */
+        .post-text blockquote {
+            margin: 10px 0;
+            padding-left: 10px;
+            border-left: 3px solid var(--tg-theme-button-color);
+            color: var(--tg-theme-hint-color);
+            font-style: italic;
+        }
+
+        /* Стили для подчеркнутого и зачеркнутого текста */
+        .post-text u {
+        text-decoration: underline;
+        }
+
+        .post-text s {
+        text-decoration: line-through;
+        }

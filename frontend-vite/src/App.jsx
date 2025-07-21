@@ -458,6 +458,24 @@ function App() {
         };
     }, []); // ← ПУСТЫЕ зависимости!
 
+    useEffect(() => {
+        const handleClick = (event) => {
+            // Ищем тег <tg-spoiler> при клике
+            const spoiler = event.target.closest('tg-spoiler');
+            if (spoiler) {
+                spoiler.classList.toggle('revealed');
+            }
+        };
+
+        // Добавляем один обработчик на весь документ
+        document.addEventListener('click', handleClick);
+
+        // Убираем обработчик при размонтировании компонента
+        return () => {
+            document.removeEventListener('click', handleClick);
+        };
+    }, []);
+
     // useEffect для реалтайм обновлений
     useEffect(() => {
         if (!isLoadingNewChannel) return;

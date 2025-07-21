@@ -20,6 +20,7 @@ from datetime import datetime
 from markdown_it import MarkdownIt
 from linkify_it import LinkifyIt
 from PIL import Image
+from html import escape
 
 # Настройка
 load_dotenv()
@@ -80,86 +81,89 @@ worker_stats = {
 
 def process_text(text: str | None, entities=None) -> str | None:
     """
-    Преобразует текст и entities из Telegram в безопасный HTML.
-    1.  Если entities нет, просто ищет ссылки и заменяет их на теги <a>.
-    2.  Если entities есть, вставляет HTML-теги (<a>, <b>, <i> и т.д.)
-        в нужные позиции текста.
-    3.  Очищает итоговый HTML с помощью bleach для защиты от XSS.
+    Преобразует текст и entities из Telegram в безопасный HTML,
+    обрабатывая ссылки, форматирование, спойлеры и цитаты.
     """
     if not text:
         return None
 
-    # Настройки для очистки HTML
-    ALLOWED_TAGS = ['a', 'b', 'strong', 'i', 'em', 'pre', 'code', 'br']
+    # Расширенный список тегов для поддержки спойлеров, цитат и т.д.
+    ALLOWED_TAGS = ['a', 'b', 'strong', 'i', 'em', 'pre', 'code', 'br', 'tg-spoiler', 'u', 's', 'blockquote']
     ALLOWED_ATTRIBUTES = {'a': ['href', 'title', 'target', 'rel']}
 
     try:
+        # Если нет специального форматирования, просто ищем ссылки.
         if not entities:
-            # Просто находим и оборачиваем все ссылки, если нет entities
-            # Это самый простой случай: обычный текст с URL-адресами
+            escaped_text = escape(text)
             def set_link_attrs(attrs, new=False):
                 attrs['target'] = '_blank'
                 attrs['rel'] = 'noopener noreferrer'
                 return attrs
 
-            safe_html = bleach.linkify(
-                bleach.clean(text, tags=[], strip=True), # Сначала очищаем от любого HTML
+            linked_text = bleach.linkify(
+                escaped_text,
                 parse_email=False,
                 callbacks=[set_link_attrs]
             )
-            return safe_html.replace('\n', '<br>')
+            return linked_text.replace('\n', '<br>')
 
-
-        # --- Если entities есть, применяем их к тексту ---
-        
-        # Сортируем entities по позиции в тексте в обратном порядке
-        # Это нужно, чтобы вставка тегов не сбивала индексы для следующих entities
+        # Если форматирование есть, применяем его.
+        # Сортируем в обратном порядке, чтобы не сбить индексы при вставке тегов.
         sorted_entities = sorted(entities, key=lambda e: e.offset, reverse=True)
         
-        result_text = text
+        # Сначала экранируем ВЕСЬ текст, чтобы обезопасить его от случайного HTML.
+        result_text = escape(text)
+        
         for entity in sorted_entities:
             start = entity.offset
             end = entity.offset + entity.length
             original_part = result_text[start:end]
-
             replacement = original_part
             entity_type = entity.__class__.__name__
 
             if entity_type == 'MessageEntityTextLink' and hasattr(entity, 'url'):
-                # Вшитая ссылка: <a href="url">текст</a>
                 url = entity.url
-                replacement = f'<a href="{url}" target="_blank" rel="noopener noreferrer">{original_part}</a>'
+                replacement = f'<a href="{escape(url)}" target="_blank" rel="noopener noreferrer">{original_part}</a>'
             elif entity_type == 'MessageEntityUrl':
-                # Обычная ссылка: <a href="url">url</a>
                 url = original_part
                 if not url.startswith(('http://', 'https://')):
                     url = 'https://' + url
-                replacement = f'<a href="{url}" target="_blank" rel="noopener noreferrer">{original_part}</a>'
+                replacement = f'<a href="{escape(url)}" target="_blank" rel="noopener noreferrer">{original_part}</a>'
             elif entity_type == 'MessageEntityBold':
                 replacement = f'<b>{original_part}</b>'
             elif entity_type == 'MessageEntityItalic':
                 replacement = f'<i>{original_part}</i>'
             elif entity_type == 'MessageEntityCode':
-                 replacement = f'<code>{original_part}</code>'
+                replacement = f'<code>{original_part}</code>'
             elif entity_type == 'MessageEntityPre':
                 replacement = f'<pre>{original_part}</pre>'
-            
-            # Заменяем оригинальную часть текста на новую, с HTML-тегами
+            elif entity_type == 'MessageEntitySpoiler':
+                replacement = f'<tg-spoiler>{original_part}</tg-spoiler>'
+            elif entity_type == 'MessageEntityUnderline':
+                replacement = f'<u>{original_part}</u>'
+            elif entity_type == 'MessageEntityStrikethrough':
+                replacement = f'<s>{original_part}</s>'
+            elif entity_type == 'MessageEntityBlockquote':
+                 replacement = f'<blockquote>{original_part.replace(chr(10), "<br>")}</blockquote>'
+
             result_text = result_text[:start] + replacement + result_text[end:]
 
-        # Финальная очистка и замена переносов строк
-        safe_html = bleach.clean(
-            result_text,
+        # Финальная очистка и замена переносов строк.
+        # Заменяем переносы строк на <br> уже после всех операций, чтобы не затронуть <pre>.
+        final_html = result_text.replace('\n', '<br>')
+
+        # Bleach для дополнительной гарантии безопасности
+        return bleach.clean(
+            final_html,
             tags=ALLOWED_TAGS,
             attributes=ALLOWED_ATTRIBUTES,
             strip=False
         )
-        return safe_html.replace('\n', '<br>')
 
     except Exception as e:
-        logging.error(f"Ошибка обработки текста: {e}")
-        # В случае ошибки, возвращаем текст как есть, очищенный от HTML
-        return bleach.clean(text, tags=[], strip=True).replace('\n', '<br>')
+        logging.error(f"Критическая ошибка обработки текста: {e}", exc_info=True)
+        # В случае сбоя, возвращаем безопасный, экранированный текст.
+        return escape(text).replace('\n', '<br>')
     
 async def save_single_post(db_session: AsyncSession, post: Post, channel_title: str):
     """Сохраняет один пост немедленно"""
