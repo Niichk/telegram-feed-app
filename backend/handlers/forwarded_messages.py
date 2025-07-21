@@ -2,6 +2,7 @@ from aiogram import Router, types, F
 from sqlalchemy.ext.asyncio import AsyncSession
 from database.requests import add_subscription
 from worker import fetch_posts_for_channel, upload_avatar_to_s3, client
+from database.models import Channel
 import logging
 import asyncio
 from collections import defaultdict
@@ -69,14 +70,20 @@ async def handle_forwarded_message(message: types.Message, session: AsyncSession
 
         avatar_url = await upload_avatar_to_s3(channel_entity)
         if avatar_url:
+            # ИСПРАВЛЕНИЕ: Используем fresh query вместо merge
             async with session.begin():
-                merged_channel = await session.merge(new_channel_obj)
-                merged_channel.avatar_url = avatar_url
+                channel_to_update = await session.get(Channel, new_channel_obj.id)
+                if channel_to_update:
+                    channel_to_update.avatar_url = avatar_url
 
         await fetch_posts_for_channel(channel=new_channel_obj, db_session=session, post_limit=20)
 
-        await message.answer(f"👍 Готово! Последние посты из «{new_channel_obj.title}» добавлены в вашу ленту.")
-
+        # ИСПРАВЛЕНИЕ: Получаем title из базы данных в активной сессии
+        fresh_channel = await session.get(Channel, new_channel_obj.id)
+        channel_title = fresh_channel.title if fresh_channel else "канал"
+        
+        await message.answer(f"👍 Готово! Последние посты из «{channel_title}» добавлены в вашу ленту.")
+        
     except ValueError as e:
         logging.error(f"Не удалось получить доступ к каналу {new_channel_obj.id}: {e}")
         await message.answer(

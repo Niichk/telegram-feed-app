@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from telethon import TelegramClient, types
 from telethon.errors import ChannelPrivateError, FloodWaitError
 from telethon.tl.types import InputPeerChannel, DocumentEmpty
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
@@ -87,27 +87,29 @@ def process_text(text: str | None) -> str | None:
         # Сначала обрабатываем markdown
         html = md.renderInline(text)
         
-        # Затем принудительно обрабатываем ссылки через linkify
-        # linkify найдет все URL и обернет их в <a> теги
-        linkified_html = linkify.test(text)
-        if linkified_html:
-            # Если linkify нашел ссылки, используем его результат
-            import re
+        # Улучшенная обработка ссылок
+        import re
+        
+        # Более точный regex для поиска URL
+        url_pattern = r'(https?://[^\s<>"\'()]+(?:\([^\s<>"\'()]*\))*[^\s<>"\'().,;:]|www\.[^\s<>"\'()]+(?:\([^\s<>"\'()]*\))*[^\s<>"\'().,;:])'
+        
+        def replace_url(match):
+            url = match.group(1)
+            original_url = url
             
-            # Простая regex для поиска URL
-            url_pattern = r'(https?://[^\s<>"]+|www\.[^\s<>"]+)'
+            # Добавляем протокол для www ссылок
+            if not url.startswith(('http://', 'https://')):
+                url = 'https://' + url
             
-            def replace_url(match):
-                url = match.group(1)
-                if not url.startswith(('http://', 'https://')):
-                    url = 'http://' + url
-                return f'<a href="{url}" target="_blank" rel="noopener noreferrer">{match.group(1)}</a>'
-            
-            html = re.sub(url_pattern, replace_url, html)
+            # ИСПРАВЛЕНИЕ: Возвращаем ссылку с правильным отображением
+            return f'<a href="{url}" target="_blank" rel="noopener noreferrer">{original_url}</a>'
+        
+        # Применяем замену URL
+        html_with_links = re.sub(url_pattern, replace_url, html)
         
         # Очищаем получившийся HTML для защиты от XSS
         safe_html = bleach.clean(
-            html, 
+            html_with_links, 
             tags=ALLOWED_TAGS, 
             attributes=ALLOWED_ATTRIBUTES,
             strip=False  # Не удаляем теги, а экранируем
@@ -117,14 +119,20 @@ def process_text(text: str | None) -> str | None:
         
     except Exception as e:
         logging.error(f"Ошибка обработки текста: {e}")
-        # Fallback: простая обработка ссылок
+        # Fallback: улучшенная обработка ссылок
         import re
         
-        url_pattern = r'(https?://[^\s<>"]+)'
+        # Тот же улучшенный паттерн для fallback
+        url_pattern = r'(https?://[^\s<>"\'()]+(?:\([^\s<>"\'()]*\))*[^\s<>"\'().,;:]|www\.[^\s<>"\'()]+(?:\([^\s<>"\'()]*\))*[^\s<>"\'().,;:])'
         
         def replace_url(match):
             url = match.group(1)
-            return f'<a href="{url}" target="_blank" rel="noopener noreferrer">{url}</a>'
+            original_url = url
+            
+            if not url.startswith(('http://', 'https://')):
+                url = 'https://' + url
+            
+            return f'<a href="{url}" target="_blank" rel="noopener noreferrer">{original_url}</a>'
         
         processed = re.sub(url_pattern, replace_url, text)
         return bleach.clean(processed, tags=ALLOWED_TAGS, attributes=ALLOWED_ATTRIBUTES)
@@ -493,12 +501,39 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
         if new_posts or updated_posts:
             try:
                 if new_posts:
-                    db_session.add_all(new_posts)
-                await db_session.commit()
+                    from sqlalchemy.dialects.postgresql import insert
+                    
+                    for post in new_posts:
+                        stmt = insert(Post).values(
+                            channel_id=post.channel_id,
+                            message_id=post.message_id,
+                            text=post.text,
+                            date=post.date,
+                            grouped_id=post.grouped_id,
+                            media=post.media,
+                            views=post.views,
+                            reactions=post.reactions,
+                            forwarded_from=post.forwarded_from
+                        )
+                        
+                        # При конфликте - обновляем views и reactions
+                        stmt = stmt.on_conflict_do_update(
+                            constraint='_channel_message_uc',
+                            set_=dict(
+                                views=stmt.excluded.views,
+                                reactions=stmt.excluded.reactions,
+                                updated_at=func.now()
+                            )
+                        )
+                        
+                        await db_session.execute(stmt)
+                    
+                    await db_session.commit()
+                    logging.info(f"Создано/обновлено {len(new_posts)} постов для «{channel_title_for_log}»")
                 
-                if new_posts: 
-                    logging.info(f"Создано {len(new_posts)} новых постов для «{channel_title_for_log}»")
-                if updated_posts: 
+                # Обычные обновления остаются как есть
+                if updated_posts:
+                    await db_session.commit()
                     logging.info(f"Обновлено {len(updated_posts)} постов в «{channel_title_for_log}»")
                     
             except Exception as e:
