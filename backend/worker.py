@@ -99,7 +99,7 @@ def process_text(message_text: str | None) -> str | None:
 
     try:
         # 1. Конвертируем Markdown в HTML. Библиотека сама найдет ссылки.
-        html_from_markdown = md_parser.render(message_text)
+        html_from_markdown = md_parser.renderInline(message_text)
 
         # 2. Очищаем полученный HTML, разрешая только безопасные теги.
         # Это защитит от любых вредоносных вставок.
@@ -337,25 +337,44 @@ async def upload_avatar_to_s3(channel_entity) -> str | None:
         return None
 
 async def process_grouped_messages(grouped_messages, channel_id_for_log, db_session):
-    """Обрабатывает группу сообщений (альбом) как один пост"""
+    """Обрабатывает группу сообщений (альбом) как один пост,
+       корректно находя сообщение с текстом."""
     if not grouped_messages:
         return None
 
-    main_message = grouped_messages[0]
+    # --- НАЧАЛО ИСПРАВЛЕНИЯ ---
+    # 1. Сначала находим "главное" сообщение, у которого есть текст.
+    #    Оно может быть не первым в группе.
+    main_message = None
+    for m in sorted(grouped_messages, key=lambda msg: msg.id): # Сортируем для стабильности
+        if m.text:
+            main_message = m
+            break
+    
+    # Если текста нет ни в одном сообщении, просто берем первое как основное
+    # для получения ID, даты и т.д.
+    if main_message is None:
+        main_message = sorted(grouped_messages, key=lambda msg: msg.id)[0]
+    # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
+
+    # 2. Собираем медиафайлы из ВСЕХ сообщений группы
     media_items = []
     for msg in grouped_messages:
         media_item = await upload_media_to_s3(msg, channel_id_for_log)
         if media_item:
             media_items.append(media_item)
 
+    # 3. Берем реакции и информацию о репосте из "главного" сообщения
     reactions_data = []
     if main_message.reactions and main_message.reactions.results:
         for r in main_message.reactions.results:
             if r.count > 0:
+                reaction_item = {"count": r.count}
                 if hasattr(r.reaction, 'emoticon') and r.reaction.emoticon:
-                    reactions_data.append({"emoticon": r.reaction.emoticon, "count": r.count})
+                    reaction_item["emoticon"] = r.reaction.emoticon
                 elif hasattr(r.reaction, 'document_id'):
-                    reactions_data.append({"document_id": r.reaction.document_id, "count": r.count})
+                    reaction_item["document_id"] = r.reaction.document_id
+                reactions_data.append(reaction_item)
 
     forward_data = None
     if main_message.fwd_from:
@@ -364,20 +383,16 @@ async def process_grouped_messages(grouped_messages, channel_id_for_log, db_sess
                 source_entity = await client.get_entity(main_message.fwd_from.from_id)
                 from_name = getattr(source_entity, 'title', getattr(source_entity, 'first_name', 'Неизвестный источник'))
                 username = getattr(source_entity, 'username', None)
-
                 raw_channel_id = getattr(source_entity, 'id', None)
-                if raw_channel_id:
-                    channel_id = str(raw_channel_id)[4:] if str(raw_channel_id).startswith('-100') else str(raw_channel_id)
-                else:
-                    channel_id = None
-
-                forward_data = {"from_name": from_name, "username": username, "channel_id": channel_id}
+                channel_id_str = str(raw_channel_id)[4:] if raw_channel_id and str(raw_channel_id).startswith('-100') else str(raw_channel_id) if raw_channel_id else None
+                forward_data = {"from_name": from_name, "username": username, "channel_id": channel_id_str}
             elif hasattr(main_message.fwd_from, 'from_name') and main_message.fwd_from.from_name:
                 forward_data = {"from_name": main_message.fwd_from.from_name, "username": None, "channel_id": None}
         except Exception as e:
             logging.warning(f"Не удалось получить entity для репоста в альбоме: {e}")
             forward_data = {"from_name": "Недоступный источник", "username": None, "channel_id": None}
-
+    
+    # 4. Обрабатываем текст из "главного" сообщения
     processed_text = process_text(main_message.text)
     
     new_post = Post(
