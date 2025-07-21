@@ -77,10 +77,12 @@ class Post(Base):
     # Relationships
     channel: Mapped["Channel"] = relationship(back_populates="posts")
 
-    # ПРАВИЛЬНЫЕ ограничения для Post
+    # ТОЛЬКО ЭТО - никакого class Config:
     __table_args__ = (
         UniqueConstraint('channel_id', 'message_id', name='_channel_message_uc'),
         Index('ix_posts_channel_date', 'channel_id', 'date'),
+        Index('ix_posts_grouped', 'grouped_id'),
+        Index('ix_posts_views', 'views'),
     )
 
 class BackfillRequest(Base):

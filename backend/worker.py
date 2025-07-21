@@ -171,6 +171,13 @@ async def upload_media_to_s3(message: types.Message, channel_id: int) -> dict | 
     media_data = {}
     media_type = None
 
+    # ИСПРАВЛЕНИЕ: Проверка размера файла ПЕРЕД обработкой
+    if isinstance(message.media, types.MessageMediaDocument):
+        file_size = getattr(message.media.document, 'size', 0)
+        if file_size > 60 * 1024 * 1024:  # 60MB лимит
+            logging.warning(f"Файл слишком большой ({file_size} bytes), пропускаем")
+            return None
+
     if isinstance(message.media, types.MessageMediaPhoto):
         media_type = 'photo'
     elif isinstance(message.media, types.MessageMediaDocument):
@@ -180,7 +187,7 @@ async def upload_media_to_s3(message: types.Message, channel_id: int) -> dict | 
         elif mime_type.startswith('audio/'):
             media_type = 'audio'
         elif mime_type in ['image/gif', 'video/mp4'] and 'gif' in getattr(message.media.document, 'file_name', '').lower():
-            media_type = 'gif'  # ДОБАВЛЕНО: поддержка GIF
+            media_type = 'gif'
 
     if not media_type:
         return None
@@ -268,10 +275,9 @@ async def upload_media_to_s3(message: types.Message, channel_id: int) -> dict | 
             media_data["thumbnail_url"] = f"https://{S3_BUCKET_NAME}.s3.{S3_REGION}.amazonaws.com/{thumb_key}"
 
         return media_data
-
+    
     except Exception as e:
-        logging.error(f"Ошибка загрузки медиа из поста {message.id}: {e}", exc_info=True)
-        worker_stats['errors'] += 1
+        logging.error(f"Критическая ошибка в upload_media_to_s3: {e}", exc_info=True)
         return None
 
 async def upload_avatar_to_s3(channel_entity) -> str | None:

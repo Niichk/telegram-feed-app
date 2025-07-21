@@ -4,7 +4,7 @@ import os
 import json
 import logging
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Header, Depends, Query
+from fastapi import FastAPI, HTTPException, Header, Depends, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, AsyncGenerator
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,13 +20,26 @@ from fastapi_cache.backends.redis import RedisBackend
 from fastapi_cache.decorator import cache
 from redis import asyncio as aioredis
 
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
 load_dotenv()
+
+limiter = Limiter(key_func=get_remote_address)
 
 BOT_TOKEN = os.getenv("API_TOKEN")
 REDIS_URL = os.getenv("REDIS_URL")
 FRONTEND_URL = os.getenv("FRONTEND_URL")
 
 app = FastAPI(title="Feed Reader API")
+app.state.limiter = limiter
+
+# Fix: Wrap the handler to match FastAPI's expected signature
+def rate_limit_exceeded_handler(request, exc):
+    return _rate_limit_exceeded_handler(request, exc)
+
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
 @app.on_event("startup")
 async def on_startup():
@@ -79,9 +92,11 @@ def is_valid_tma_data(init_data: str) -> dict | None:
 
 @app.get("/api/feed/", response_model=schemas.FeedResponse)
 @cache(expire=120)
-async def get_feed_for_user(  # ИСПРАВЛЕНИЕ: убираем @cache временно
+@limiter.limit("30/minute")
+async def get_feed_for_user(
+    request: Request,  # ДОБАВИТЬ: нужен для limiter
     session: AsyncSession = Depends(get_db_session),
-    page: int = Query(1, gt=0),
+    page: int = Query(1, ge=1),
     authorization: str | None = Header(None)
 ):
     # ДОБАВЛЕНИЕ: логирование для отладки
