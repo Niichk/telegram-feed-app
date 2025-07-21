@@ -340,15 +340,16 @@ body {
             overflow: hidden;
         }
 
-        .video-thumbnail-overlay {
+        /* Видео занимает всю область */
+        .post-media-visual[controls] {
             width: 100%;
-            height: auto;
-            display: block;
             max-height: 70vh;
             object-fit: cover;
-            cursor: pointer;
+            display: block;
+            border-radius: 8px;
         }
 
+        /* Единственная кнопка play поверх видео */
         .video-play-overlay {
             position: absolute;
             top: 0;
@@ -361,6 +362,7 @@ body {
             cursor: pointer;
             background: rgba(0, 0, 0, 0.1);
             transition: background 0.3s ease;
+            z-index: 2;
         }
 
         .video-play-overlay:hover {
@@ -385,30 +387,8 @@ body {
             background: rgba(0, 0, 0, 0.9);
             transform: scale(1.1);
         }
-
-        /* Скрываем видео пока не началось воспроизведение */
-        .video-hidden {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            opacity: 0;
-            pointer-events: none;
-        }
-
-        /* Мобильные стили */
-        @media (max-width: 768px) {
-            .video-play-button {
-                width: 60px;
-                height: 60px;
-                font-size: 24px;
-            }
             
-            .video-thumbnail-overlay {
-                max-height: 60vh;
-            }
-        }
+
 
         /* Стили для обычного видео без превью */
         .post-media-visual[controls]:not(.video-hidden) {
