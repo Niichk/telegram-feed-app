@@ -179,26 +179,21 @@ async def upload_media_to_s3(message: types.Message, channel_id: int) -> dict | 
             media_type = 'video'
         elif mime_type.startswith('audio/'):
             media_type = 'audio'
+        elif mime_type in ['image/gif', 'video/mp4'] and 'gif' in getattr(message.media.document, 'file_name', '').lower():
+            media_type = 'gif'  # ДОБАВЛЕНО: поддержка GIF
 
     if not media_type:
         return None
 
     try:
-        # 1. Загружаем основной медиафайл
-        file_in_memory = io.BytesIO()
-        await client.download_media(message, file=file_in_memory)
-        file_in_memory.seek(0)
-
+        # Проверяем, существует ли уже файл в S3
         if media_type == 'photo':
-            with Image.open(file_in_memory) as im:
-                im = im.convert("RGB")
-                output_buffer = io.BytesIO()
-                im.save(output_buffer, format="WEBP", quality=80)
-                output_buffer.seek(0)
-                file_in_memory = output_buffer
             file_extension = '.webp'
             content_type = 'image/webp'
-        else: # Для видео и аудио
+        elif media_type == 'gif':
+            file_extension = '.gif'
+            content_type = 'image/gif'
+        else:
             doc = message.media.document # type: ignore
             attributes = getattr(doc, 'attributes', [])
             file_name = next((attr.file_name for attr in attributes if hasattr(attr, 'file_name')), None)
@@ -206,34 +201,71 @@ async def upload_media_to_s3(message: types.Message, channel_id: int) -> dict | 
             content_type = getattr(doc, 'mime_type', 'application/octet-stream')
 
         file_key = f"media/{channel_id}/{message.id}{file_extension}"
-        s3_client.upload_fileobj(file_in_memory, S3_BUCKET_NAME, file_key, ExtraArgs={'ContentType': content_type})
+        
+        # ИСПРАВЛЕНИЕ: Проверяем существование файла в S3
+        try:
+            s3_client.head_object(Bucket=S3_BUCKET_NAME, Key=file_key)
+            file_exists = True
+        except s3_client.exceptions.NoSuchKey:
+            file_exists = False
+        except Exception:
+            file_exists = False
+
+        if not file_exists:
+            # Загружаем основной медиафайл только если его нет
+            file_in_memory = io.BytesIO()
+            await client.download_media(message, file=file_in_memory)
+            file_in_memory.seek(0)
+
+            if media_type == 'photo':
+                with Image.open(file_in_memory) as im:
+                    im = im.convert("RGB")
+                    output_buffer = io.BytesIO()
+                    im.save(output_buffer, format="WEBP", quality=80)
+                    output_buffer.seek(0)
+                    file_in_memory = output_buffer
+            # GIF остаются как есть
+            
+            s3_client.upload_fileobj(file_in_memory, S3_BUCKET_NAME, file_key, ExtraArgs={'ContentType': content_type})
+            logging.info(f"Загружен медиафайл: {file_key}")
         
         media_data["type"] = media_type
         media_data["url"] = f"https://{S3_BUCKET_NAME}.s3.{S3_REGION}.amazonaws.com/{file_key}"
 
-        # 2. ИСПРАВЛЕНИЕ: Надежно ищем и загружаем превью для видео
+        # ИСПРАВЛЕНИЕ: Проверяем существование превью для видео
         document = getattr(message.media, 'document', None)
         if (
             media_type == 'video'
-            and document and not isinstance(document, DocumentEmpty) # type: ignore
+            and document and not isinstance(document, DocumentEmpty)
             and hasattr(document, 'thumbs') and document.thumbs
         ):
-            thumb_in_memory = io.BytesIO()
-            await client.download_media(message, thumb=-1, file=thumb_in_memory)
-            thumb_in_memory.seek(0)
+            thumb_key = f"media/{channel_id}/{message.id}_thumb.webp"
+            
+            # Проверяем существование превью
+            try:
+                s3_client.head_object(Bucket=S3_BUCKET_NAME, Key=thumb_key)
+                thumb_exists = True
+            except s3_client.exceptions.NoSuchKey:
+                thumb_exists = False
+            except Exception:
+                thumb_exists = False
 
-            if thumb_in_memory.getbuffer().nbytes > 0:
-                with Image.open(thumb_in_memory) as im:
-                    im = im.convert("RGB")
-                    output_buffer = io.BytesIO()
-                    im.save(output_buffer, format="WEBP", quality=75)
-                    output_buffer.seek(0)
-                    
-                    thumb_key = f"media/{channel_id}/{message.id}_thumb.webp"
-                    s3_client.upload_fileobj(output_buffer, S3_BUCKET_NAME, thumb_key, ExtraArgs={'ContentType': 'image/webp'})
-                    
-                    media_data["thumbnail_url"] = f"https://{S3_BUCKET_NAME}.s3.{S3_REGION}.amazonaws.com/{thumb_key}"
-                    logging.info(f"Загружено превью для видео: {thumb_key}")
+            if not thumb_exists:
+                thumb_in_memory = io.BytesIO()
+                await client.download_media(message, thumb=-1, file=thumb_in_memory)
+                thumb_in_memory.seek(0)
+
+                if thumb_in_memory.getbuffer().nbytes > 0:
+                    with Image.open(thumb_in_memory) as im:
+                        im = im.convert("RGB")
+                        output_buffer = io.BytesIO()
+                        im.save(output_buffer, format="WEBP", quality=75)
+                        output_buffer.seek(0)
+                        
+                        s3_client.upload_fileobj(output_buffer, S3_BUCKET_NAME, thumb_key, ExtraArgs={'ContentType': 'image/webp'})
+                        logging.info(f"Загружено превью для видео: {thumb_key}")
+            
+            media_data["thumbnail_url"] = f"https://{S3_BUCKET_NAME}.s3.{S3_REGION}.amazonaws.com/{thumb_key}"
 
         return media_data
 
@@ -348,7 +380,6 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                 select(Post).where(Post.channel_id == channel_id_for_log, Post.message_id == message.id)
             )
             
-            # --- ИСПРАВЛЕНИЕ: Логика обновления только при реальных изменениях ---
             if existing_post:
                 needs_update = False
                 
@@ -375,7 +406,7 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                     existing_post.reactions = new_reactions
                     needs_update = True
                 
-                # Проверка текста (на случай редактирования)
+                # Проверка текста
                 new_text = process_text(message.text)
                 if existing_post.text != (new_text if new_text is not None else ""):
                     existing_post.text = new_text if new_text is not None else ""
@@ -384,10 +415,10 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                 if needs_update:
                     updated_posts.append(existing_post)
             else:
-                # Логика создания нового поста...
+                # Создание нового поста
                 processed_text = process_text(message.text)
                 media_item = await upload_media_to_s3(message, channel_id_for_log)
-                # Define reactions_data before using it
+                
                 reactions_data = []
                 if message.reactions and message.reactions.results:
                     for r in message.reactions.results:
@@ -398,7 +429,7 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                             elif hasattr(r.reaction, 'document_id'):
                                 reaction_data["document_id"] = r.reaction.document_id
                             reactions_data.append(reaction_data)
-                # Define forward_data before using it
+                
                 forward_data = None
                 if message.fwd_from:
                     try:
@@ -413,6 +444,7 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                             forward_data = {"from_name": message.fwd_from.from_name, "username": None, "channel_id": None}
                     except Exception:
                         forward_data = {"from_name": "Недоступный источник", "username": None, "channel_id": None}
+                
                 new_post = Post(
                     channel_id=channel_id_for_log,
                     message_id=message.id,
@@ -425,50 +457,50 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                 )
                 new_posts.append(new_post)
 
+        # Обработка групповых сообщений
         for group_id, messages in grouped_messages.items():
             if not messages:
                 continue
 
-            existing_group_post_query = await db_session.execute(
+            existing_group_post = await db_session.scalar(
                 select(Post).where(Post.grouped_id == group_id)
             )
-            existing_group_post = existing_group_post_query.scalars().first()
 
             if not existing_group_post:
                 group_post = await process_grouped_messages(messages, channel_id_for_log, db_session)
                 if group_post:
                     new_posts.append(group_post)
             else:
+                # Обновление группового поста
                 main_message = messages[0]
-                existing_group_post.views = getattr(main_message, 'views', 0) or 0
-                forward_data = None
-                if main_message.fwd_from:
-                    try:
-                        if hasattr(main_message.fwd_from, 'from_id') and main_message.fwd_from.from_id:
-                            source_entity = await client.get_entity(main_message.fwd_from.from_id)
-                            from_name = getattr(source_entity, 'title', getattr(source_entity, 'first_name', 'Неизвестный источник'))
-                            username = getattr(source_entity, 'username', None)
-                            raw_channel_id = getattr(source_entity, 'id', None)
-                            channel_id = str(raw_channel_id)[4:] if raw_channel_id and str(raw_channel_id).startswith('-100') else str(raw_channel_id) if raw_channel_id else None
-                            existing_group_post.forwarded_from = {"from_name": from_name, "username": username, "channel_id": channel_id}
-                        elif hasattr(main_message.fwd_from, 'from_name') and main_message.fwd_from.from_name:
-                            existing_group_post.forwarded_from = {"from_name": main_message.fwd_from.from_name, "username": None, "channel_id": None}
-                    except Exception:
-                        existing_group_post.forwarded_from = {"from_name": "Недоступный источник", "username": None, "channel_id": None}
-                updated_posts.append(existing_group_post)
+                needs_update = False
+                
+                new_views = getattr(main_message, 'views', 0) or 0
+                if existing_group_post.views != new_views:
+                    existing_group_post.views = new_views
+                    needs_update = True
+                
+                if needs_update:
+                    updated_posts.append(existing_group_post)
 
-        
-            if new_posts or updated_posts:
-                try:
-                    if new_posts:
-                        db_session.add_all(new_posts)
-                    await db_session.commit()
-                    if new_posts: logging.info(f"Создано {len(new_posts)} новых постов для «{channel_title_for_log}»")
-                    if updated_posts: logging.info(f"Обновлено {len(updated_posts)} постов в «{channel_title_for_log}»")
-                except Exception as e:
-                    logging.error(f"Ошибка сохранения постов для «{channel_title_for_log}»: {e}")
-                    await db_session.rollback()
-                    worker_stats['errors'] += 1
+        # ИСПРАВЛЕНИЕ: Сохранение вынесено за пределы циклов
+        if new_posts or updated_posts:
+            try:
+                if new_posts:
+                    db_session.add_all(new_posts)
+                await db_session.commit()
+                
+                if new_posts: 
+                    logging.info(f"Создано {len(new_posts)} новых постов для «{channel_title_for_log}»")
+                if updated_posts: 
+                    logging.info(f"Обновлено {len(updated_posts)} постов в «{channel_title_for_log}»")
+                    
+            except Exception as e:
+                logging.error(f"Ошибка сохранения постов для «{channel_title_for_log}»: {e}")
+                await db_session.rollback()
+                worker_stats['errors'] += 1
+        else:
+            logging.info(f"Нет изменений для канала «{channel_title_for_log}»")
 
     except Exception as e:
         logging.error(f"Критическая ошибка при обработке «{channel_title_for_log}»: {e}", exc_info=True)

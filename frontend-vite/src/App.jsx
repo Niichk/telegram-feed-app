@@ -164,6 +164,21 @@ const PostMedia = React.memo(({ media }) => {
                                     />
                                 )
                             )}
+
+                            {/* ДОБАВЛЕНО: Поддержка GIF */}
+                            {item.type === 'gif' && (
+                                imageErrors.has(item.url) ? (
+                                    <div className="image-placeholder">Не удалось загрузить GIF</div>
+                                ) : (
+                                    <img 
+                                        src={item.url} 
+                                        className="post-media-visual gif-media" 
+                                        alt={`GIF ${index + 1}`} 
+                                        loading="lazy"
+                                        onError={() => handleImageError(item.url)}
+                                    />
+                                )
+                            )}
                             
                             {item.type === 'video' && (
                                 <div className="video-container">
