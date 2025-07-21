@@ -8,15 +8,14 @@ import bleach
 from dotenv import load_dotenv
 from telethon import TelegramClient, types
 from telethon.errors import ChannelPrivateError, FloodWaitError
-from telethon.tl.types import InputPeerChannel
+from telethon.tl.types import InputPeerChannel, DocumentEmpty
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
-from database.engine import session_maker, create_db
+from database.engine import session_maker
 from database.models import Channel, Post, BackfillRequest
 from telethon.sessions import StringSession
-from io import BytesIO
 from datetime import datetime
 from markdown_it import MarkdownIt
 from linkify_it import LinkifyIt
@@ -483,6 +482,58 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
         await db_session.rollback()
         worker_stats['errors'] += 1
 
+
+async def process_channel_safely(channel: Channel, semaphore: asyncio.Semaphore, post_limit: int):
+    """
+    Безопасная обертка для обработки одного канала.
+    Создает собственную сессию БД и отлавливает все ошибки.
+    """
+    async with semaphore:
+        # Для каждой параллельной задачи создаем свою короткоживущую сессию
+        async with session_maker() as session:
+            try:
+                await fetch_posts_for_channel(channel, session, post_limit=post_limit)
+            except Exception as e:
+                # Отлавливаем любые непредвиденные ошибки, чтобы не уронить весь gather
+                logging.error(f"Не удалось обработать канал {channel.title} из-за критической ошибки: {e}", exc_info=True)
+
+async def periodic_task_parallel():
+    """
+    Периодическая задача, которая обходит все каналы в базе данных
+    С ПАРАЛЛЕЛЬНОЙ ОБРАБОТКОЙ.
+    """
+    logging.info("Начинаю периодический сбор постов...")
+    
+    list_of_channels = []
+    # Получаем список всех каналов из БД в одной короткой сессии
+    async with session_maker() as session:
+        result = await session.execute(select(Channel))
+        list_of_channels = result.scalars().all()
+
+    if not list_of_channels:
+        logging.info("В базе нет каналов для отслеживания.")
+        return
+
+    # Создаем семафор для ограничения количества одновременных задач
+    # 10-15 - хорошее значение, чтобы не перегрузить сеть и API Telegram
+    semaphore = asyncio.Semaphore(15)
+
+    # Создаем список задач для параллельного выполнения
+    tasks = [process_channel_safely(channel, semaphore, POST_LIMIT) for channel in list_of_channels]
+
+    if not tasks:
+        return
+        
+    logging.info(f"Запускаю обработку {len(tasks)} каналов параллельно...")
+    
+    # Запускаем все задачи на выполнение
+    # return_exceptions=True гарантирует, что даже если одна задача упадет, остальные продолжат работу
+    await asyncio.gather(*tasks, return_exceptions=True)
+    
+    logging.info("Все каналы обработаны.")
+    await log_worker_stats()
+
+
 async def backfill_user_channels(user_id: int):
     """
     Находит самые старые посты для каждого канала пользователя и запускает дозагрузку.
@@ -560,6 +611,8 @@ async def process_backfill_requests():
                 await db_session.rollback()
                 worker_stats['errors'] += 1
 
+from database.engine import create_db
+
 async def main():
     await create_db()
     logging.info("Worker: Database tables checked/created.")
@@ -574,7 +627,7 @@ async def main():
                 while True:
                     try:
                         await asyncio.gather(
-                            periodic_task(),
+                            periodic_task_parallel(),
                             process_backfill_requests()
                         )
                         logging.info(f"Все задачи выполнены. Засыпаю на {SLEEP_TIME / 60:.1f} минут...")

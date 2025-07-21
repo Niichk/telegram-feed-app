@@ -38,6 +38,21 @@ class ErrorBoundary extends Component {
     }
 }
 
+const SkeletonCard = () => (
+    <div className="skeleton-card">
+        <div className="skeleton-header">
+            <div className="skeleton skeleton-avatar"></div>
+            <div className="skeleton-info">
+                <div className="skeleton skeleton-line skeleton-line-short"></div>
+                <div className="skeleton skeleton-line" style={{ width: '40%' }}></div>
+            </div>
+        </div>
+        <div className="skeleton skeleton-line skeleton-line-long"></div>
+        <div className="skeleton skeleton-line skeleton-line-long"></div>
+        <div className="skeleton skeleton-line skeleton-line-short"></div>
+    </div>
+);
+
 const PostCard = React.memo(({ post }) => {
     const formatDate = (dateString) => new Date(dateString).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
     const getPostUrl = (p) => p.channel.username ? `https://t.me/${p.channel.username}/${p.message_id}` : `https://t.me/c/${String(p.channel.id).substring(4)}/${p.message_id}`;
@@ -525,9 +540,13 @@ function App() {
 
     if (initialLoading) {
         return (
-            <div className="status-message">
-                <RadialLoader />
-            </div>
+            <>
+                <Header onRefresh={() => {}} onScrollUp={() => {}} />
+                <div className="feed-container">
+                    {/* Рендерим несколько скелетов для имитации ленты */}
+                    {[...Array(5)].map((_, i) => <SkeletonCard key={i} />)}
+                </div>
+            </>
         );
     }
 

@@ -416,3 +416,66 @@ body {
             max-height: 70vh;
             object-fit: cover;
         }
+
+        .skeleton-card {
+            border-radius: 8px;
+            margin-bottom: 12px;
+            background-color: var(--tg-theme-secondary-bg-color);
+            border: 1px solid var(--tg-theme-hint-color);
+            padding: 16px;
+            overflow: hidden;
+        }
+
+        .skeleton {
+            background-color: var(--tg-theme-hint-color);
+            border-radius: 4px;
+            opacity: 0.6;
+            animation: shimmer 1.5s infinite linear;
+        }
+
+        .skeleton-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .skeleton-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            margin-right: 12px;
+        }
+
+        .skeleton-info {
+            flex-grow: 1;
+        }
+
+        .skeleton-line {
+            height: 1em;
+            margin-bottom: 0.5em;
+        }
+
+        .skeleton-line-short {
+            width: 60%;
+        }
+
+        .skeleton-line-long {
+            width: 90%;
+        }
+
+        .skeleton-line:last-child {
+            margin-bottom: 0;
+        }
+
+        /* Анимация мерцания */
+        @keyframes shimmer {
+            0% {
+                background-color: var(--tg-theme-hint-color);
+            }
+            50% {
+                background-color: var(--tg-theme-bg-color);
+            }
+            100% {
+                background-color: var(--tg-theme-hint-color);
+            }
+        }
