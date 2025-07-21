@@ -2,7 +2,6 @@ import React, { useState, useEffect, useCallback, useRef, Component } from 'reac
 
 // --- Вспомогательные компоненты ---
 
-
 class ErrorBoundary extends Component {
     constructor(props) {
         super(props);
@@ -150,18 +149,74 @@ const PostMedia = React.memo(({ media }) => {
                                     />
                                 )
                             )}
-                            {/* --- ИСПРАВЛЕНИЕ ЗДЕСЬ --- */}
+                            {/* --- ИСПРАВЛЕННЫЙ БЛОК С ВИДЕО --- */}
                             {item.type === 'video' && (
-                                <video 
-                                    controls 
-                                    muted 
-                                    playsInline 
-                                    className="post-media-visual"
-                                    poster={item.thumbnail_url}  // Используем превью
-                                    preload="metadata"          // Говорим браузеру не качать видео сразу
-                                >
-                                    <source src={item.url} />
-                                </video>
+                                <div className="video-container">
+                                    {item.thumbnail_url ? (
+                                        <>
+                                            {/* Превью как изображение */}
+                                            <img 
+                                                src={item.thumbnail_url} 
+                                                className="video-thumbnail-overlay" 
+                                                alt="Превью видео"
+                                                loading="lazy"
+                                                onClick={(e) => {
+                                                    // При клике на превью запускаем видео
+                                                    const container = e.target.parentElement;
+                                                    const video = container.querySelector('video');
+                                                    const playOverlay = container.querySelector('.video-play-overlay');
+                                                    
+                                                    e.target.style.display = 'none';
+                                                    if (playOverlay) playOverlay.style.display = 'none';
+                                                    if (video) {
+                                                        video.classList.remove('video-hidden');
+                                                        video.play();
+                                                    }
+                                                }}
+                                                onError={(e) => e.target.style.display = 'none'}
+                                            />
+                                            {/* Кнопка Play поверх превью */}
+                                            <div 
+                                                className="video-play-overlay"
+                                                onClick={(e) => {
+                                                    const container = e.target.closest('.video-container');
+                                                    const video = container.querySelector('video');
+                                                    const thumbnail = container.querySelector('.video-thumbnail-overlay');
+                                                    
+                                                    if (thumbnail) thumbnail.style.display = 'none';
+                                                    e.target.style.display = 'none';
+                                                    if (video) {
+                                                        video.classList.remove('video-hidden');
+                                                        video.play();
+                                                    }
+                                                }}
+                                            >
+                                                <div className="video-play-button">▶️</div>
+                                            </div>
+                                            {/* Скрытое видео */}
+                                            <video 
+                                                controls 
+                                                muted 
+                                                playsInline 
+                                                className="post-media-visual video-hidden"
+                                                preload="none"
+                                            >
+                                                <source src={item.url} type="video/mp4" />
+                                            </video>
+                                        </>
+                                    ) : (
+                                        // Если нет превью, показываем обычное видео
+                                        <video 
+                                            controls 
+                                            muted 
+                                            playsInline 
+                                            className="post-media-visual"
+                                            preload="metadata"
+                                        >
+                                            <source src={item.url} type="video/mp4" />
+                                        </video>
+                                    )}
+                                </div>
                             )}
                         </div>
                     ))}
