@@ -150,18 +150,73 @@ const PostMedia = React.memo(({ media }) => {
                                     />
                                 )
                             )}
-                    {item.type === 'video' && 
-                        <video 
-                            controls 
-                            muted 
-                            playsInline 
-                            className="post-media-visual"
-                            poster={item.thumbnail_url} /* <-- ДОБАВЛЕНО: Атрибут для превью */
-                        >
-                            <source src={item.url} />
-                        </video>
-                    }                        
-                    </div>
+                            {item.type === 'video' && (
+                                <div className="video-container">
+                                    {item.thumbnail_url ? (
+                                        <div className="video-with-thumbnail">
+                                            <video 
+                                                controls 
+                                                muted 
+                                                playsInline 
+                                                className="post-media-visual"
+                                                poster={item.thumbnail_url}
+                                                preload="metadata" // ДОБАВЛЕНО: загрузка только метаданных
+                                                onError={(e) => {
+                                                    console.log('Video error:', e);
+                                                    // Если видео не загружается, скрываем poster
+                                                    e.target.removeAttribute('poster');
+                                                }}
+                                                onLoadedMetadata={(e) => {
+                                                    // Когда метаданные загружены, проверяем poster
+                                                    const video = e.target;
+                                                    const img = new Image();
+                                                    img.onload = () => {
+                                                        // Poster успешно загружен
+                                                        video.setAttribute('poster', item.thumbnail_url);
+                                                    };
+                                                    img.onerror = () => {
+                                                        // Если poster не загружается, убираем его
+                                                        video.removeAttribute('poster');
+                                                    };
+                                                    img.src = item.thumbnail_url;
+                                                }}
+                                            >
+                                                <source src={item.url} type="video/mp4" />
+                                                <source src={item.url} /> {/* Fallback без типа */}
+                                                Ваш браузер не поддерживает воспроизведение видео.
+                                            </video>
+                                            
+                                            {/* ДОБАВЛЕНО: Fallback превью как отдельный элемент */}
+                                            <div 
+                                                className="video-thumbnail-fallback"
+                                                style={{
+                                                    backgroundImage: `url(${item.thumbnail_url})`,
+                                                    display: 'none' // Показываем через CSS при ошибке video
+                                                }}
+                                                onClick={(e) => {
+                                                    // При клике скрываем превью и показываем видео
+                                                    e.target.style.display = 'none';
+                                                    e.target.nextElementSibling?.play?.();
+                                                }}
+                                            >
+                                                <div className="video-play-button">▶️</div>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <video 
+                                            controls 
+                                            muted 
+                                            playsInline 
+                                            className="post-media-visual"
+                                            preload="metadata"
+                                        >
+                                            <source src={item.url} type="video/mp4" />
+                                            <source src={item.url} />
+                                        </video>
+                                    )}
+                                </div>
+                            )}
+                        </div>
                     ))}
                     {visualMedia.length > 1 && (
                         <>
