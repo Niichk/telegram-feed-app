@@ -180,47 +180,49 @@ const PostMedia = React.memo(({ media }) => {
                             )}
                             
                             {item.type === 'video' && (
-                                <div className="video-container">
-                                    <video 
-                                        controls 
-                                        muted 
-                                        playsInline 
-                                        className="post-media-visual"
-                                        preload="metadata"
-                                        poster={item.thumbnail_url || undefined}
-                                        onLoadedMetadata={(e) => {
-                                            if (!item.thumbnail_url) {
-                                                e.target.currentTime = 0.1;
-                                            }
-                                        }}
-                                        onError={(e) => {
-                                            console.error('Video failed to load:', item.url);
-                                        }}
-                                    >
-                                        <source src={item.url} type="video/mp4" />
-                                        <source src={item.url} />
-                                        Ваш браузер не поддерживает воспроизведение видео.
-                                    </video>
-                                    
-                                    {item.thumbnail_url && (
-                                        <div 
-                                            className="video-play-overlay"
-                                            onClick={(e) => {
-                                                const container = e.target.closest('.video-container');
-                                                const video = container.querySelector('video');
-                                                
-                                                e.target.style.display = 'none';
-                                                if (video) {
-                                                    video.currentTime = 0;
-                                                    video.play();
-                                                }
-                                            }}
-                                        >
-                                            <div className="video-play-button">▶️</div>
-                                        </div>
-                                    )}
+                            <div className="video-container">
+                                <video 
+                                    muted 
+                                    playsInline 
+                                    className="post-media-visual"
+                                    preload="metadata"
+                                    poster={item.thumbnail_url || undefined}
+                                    // ИСПРАВЛЕНИЕ: НЕ показываем контролы до первого клика
+                                    controls={false}  // ← Важно! Отключаем нативные контролы
+                                    onLoadedMetadata={(e) => {
+                                        if (!item.thumbnail_url) {
+                                            e.target.currentTime = 0.1;
+                                        }
+                                    }}
+                                    onError={(e) => {
+                                        console.error('Video failed to load:', item.url);
+                                    }}
+                                >
+                                    <source src={item.url} type="video/mp4" />
+                                    <source src={item.url} />
+                                    Ваш браузер не поддерживает воспроизведение видео.
+                                </video>
+                                
+                                {/* ЕДИНСТВЕННАЯ кнопка play - показываем всегда для видео */}
+                                <div 
+                                    className="video-play-overlay"
+                                    onClick={(e) => {
+                                        const container = e.target.closest('.video-container');
+                                        const video = container.querySelector('video');
+                                        
+                                        // Скрываем нашу кнопку и включаем нативные контролы
+                                        e.target.style.display = 'none';
+                                        if (video) {
+                                            video.controls = true;  // ← Включаем контролы после клика
+                                            video.currentTime = 0;
+                                            video.play();
+                                        }
+                                    }}
+                                >
+                                    <div className="video-play-button">▶️</div>
                                 </div>
-                            )}
+                            </div>
+                        )}
                         </div>
                     ))}
                     {visualMedia.length > 1 && (
