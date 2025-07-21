@@ -331,82 +331,95 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
     channel_title_for_log = channel.title
 
     try:
-        logging.info(f"Начинаю сбор постов для канала «{channel_title_for_log}»...")
-
         entity = await get_cached_entity(channel)
-        if not entity:
-            logging.warning(f"Не удалось получить entity для «{channel_title_for_log}». Пропускаю.")
-            return
+        if not entity: return
 
-        new_posts = []
-        updated_posts = []
-        grouped_messages = {}
+        new_posts, updated_posts, grouped_messages = [], [], {}
 
         async for message in client.iter_messages(entity, limit=post_limit, offset_id=offset_id):
             if not message or (not message.text and not message.media and not message.poll):
                 continue
-
+            
             if message.grouped_id:
-                if message.grouped_id not in grouped_messages:
-                    grouped_messages[message.grouped_id] = []
-                grouped_messages[message.grouped_id].append(message)
+                grouped_messages.setdefault(message.grouped_id, []).append(message)
                 continue
 
-            existing_post_query = await db_session.execute(
+            existing_post = await db_session.scalar(
                 select(Post).where(Post.channel_id == channel_id_for_log, Post.message_id == message.id)
             )
-            existing_post = existing_post_query.scalars().first()
-
-            reactions_data = []
-            if message.reactions and message.reactions.results:
-                for r in message.reactions.results:
-                    if r.count > 0:
-                        if hasattr(r.reaction, 'emoticon') and r.reaction.emoticon:
-                           reactions_data.append({"emoticon": r.reaction.emoticon, "count": r.count})
-                        elif hasattr(r.reaction, 'document_id'):
-                           reactions_data.append({"document_id": r.reaction.document_id, "count": r.count})
-
-            forward_data = None
-            if message.fwd_from:
-                try:
-                    if hasattr(message.fwd_from, 'from_id') and message.fwd_from.from_id:
-                        source_entity = await client.get_entity(message.fwd_from.from_id)
-                        from_name = getattr(source_entity, 'title', getattr(source_entity, 'first_name', 'Неизвестный источник'))
-                        username = getattr(source_entity, 'username', None)
-                        raw_channel_id = getattr(source_entity, 'id', None)
-                        channel_id = str(raw_channel_id)[4:] if raw_channel_id and str(raw_channel_id).startswith('-100') else str(raw_channel_id) if raw_channel_id else None
-                        forward_data = {"from_name": from_name, "username": username, "channel_id": channel_id}
-                    elif hasattr(message.fwd_from, 'from_name') and message.fwd_from.from_name:
-                        forward_data = {"from_name": message.fwd_from.from_name, "username": None, "channel_id": None}
-                except Exception as e:
-                    logging.warning(f"Не удалось получить entity для репоста: {e}")
-                    forward_data = {"from_name": "Недоступный источник", "username": None, "channel_id": None}
-
-            views_count = getattr(message, 'views', 0) or 0
-
+            
+            # --- ИСПРАВЛЕНИЕ: Логика обновления только при реальных изменениях ---
             if existing_post:
-                existing_post.views = views_count
-                existing_post.reactions = reactions_data
-                existing_post.forwarded_from = forward_data # type: ignore
-                if message.text:
-                    processed = process_text(message.text)
-                    existing_post.text = processed if processed is not None else ""
-                updated_posts.append(existing_post)
-            else:
-                if not message.id or not message.date:
-                    logging.warning(f"Пропускаю сообщение с некорректными данными: ID={message.id}, date={message.date}")
-                    continue
+                needs_update = False
+                
+                # Проверка просмотров
+                new_views = getattr(message, 'views', 0) or 0
+                if existing_post.views != new_views:
+                    existing_post.views = new_views
+                    needs_update = True
+                
+                # Проверка реакций
+                new_reactions = []
+                if message.reactions and message.reactions.results:
+                    for r in message.reactions.results:
+                        if r.count > 0:
+                            reaction_data = {"count": r.count}
+                            if hasattr(r.reaction, 'emoticon') and r.reaction.emoticon:
+                                reaction_data["emoticon"] = r.reaction.emoticon
+                            elif hasattr(r.reaction, 'document_id'):
+                                reaction_data["document_id"] = r.reaction.document_id
+                            new_reactions.append(reaction_data)
+                
+                # Сравнение без учета порядка
+                if sorted(existing_post.reactions or [], key=lambda x: str(x)) != sorted(new_reactions, key=lambda x: str(x)):
+                    existing_post.reactions = new_reactions
+                    needs_update = True
+                
+                # Проверка текста (на случай редактирования)
+                new_text = process_text(message.text)
+                if existing_post.text != (new_text if new_text is not None else ""):
+                    existing_post.text = new_text if new_text is not None else ""
+                    needs_update = True
 
-                media_item = await upload_media_to_s3(message, channel_id_for_log)
+                if needs_update:
+                    updated_posts.append(existing_post)
+            else:
+                # Логика создания нового поста...
                 processed_text = process_text(message.text)
+                media_item = await upload_media_to_s3(message, channel_id_for_log)
+                # Define reactions_data before using it
+                reactions_data = []
+                if message.reactions and message.reactions.results:
+                    for r in message.reactions.results:
+                        if r.count > 0:
+                            reaction_data = {"count": r.count}
+                            if hasattr(r.reaction, 'emoticon') and r.reaction.emoticon:
+                                reaction_data["emoticon"] = r.reaction.emoticon
+                            elif hasattr(r.reaction, 'document_id'):
+                                reaction_data["document_id"] = r.reaction.document_id
+                            reactions_data.append(reaction_data)
+                # Define forward_data before using it
+                forward_data = None
+                if message.fwd_from:
+                    try:
+                        if hasattr(message.fwd_from, 'from_id') and message.fwd_from.from_id:
+                            source_entity = await client.get_entity(message.fwd_from.from_id)
+                            from_name = getattr(source_entity, 'title', getattr(source_entity, 'first_name', 'Неизвестный источник'))
+                            username = getattr(source_entity, 'username', None)
+                            raw_channel_id = getattr(source_entity, 'id', None)
+                            channel_id = str(raw_channel_id)[4:] if raw_channel_id and str(raw_channel_id).startswith('-100') else str(raw_channel_id) if raw_channel_id else None
+                            forward_data = {"from_name": from_name, "username": username, "channel_id": channel_id}
+                        elif hasattr(message.fwd_from, 'from_name') and message.fwd_from.from_name:
+                            forward_data = {"from_name": message.fwd_from.from_name, "username": None, "channel_id": None}
+                    except Exception:
+                        forward_data = {"from_name": "Недоступный источник", "username": None, "channel_id": None}
                 new_post = Post(
                     channel_id=channel_id_for_log,
                     message_id=message.id,
                     date=message.date,
                     text=processed_text,
-                    grouped_id=message.grouped_id,
                     media=[media_item] if media_item else [],
-                    views=views_count,
+                    views=getattr(message, 'views', 0) or 0,
                     reactions=reactions_data,
                     forwarded_from=forward_data
                 )
@@ -444,42 +457,21 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                         existing_group_post.forwarded_from = {"from_name": "Недоступный источник", "username": None, "channel_id": None}
                 updated_posts.append(existing_group_post)
 
-        try:
-            if new_posts:
-                db_session.add_all(new_posts)
+        
             if new_posts or updated_posts:
-                await db_session.commit()
+                try:
+                    if new_posts:
+                        db_session.add_all(new_posts)
+                    await db_session.commit()
+                    if new_posts: logging.info(f"Создано {len(new_posts)} новых постов для «{channel_title_for_log}»")
+                    if updated_posts: logging.info(f"Обновлено {len(updated_posts)} постов в «{channel_title_for_log}»")
+                except Exception as e:
+                    logging.error(f"Ошибка сохранения постов для «{channel_title_for_log}»: {e}")
+                    await db_session.rollback()
+                    worker_stats['errors'] += 1
 
-            posts_created = len(new_posts)
-            posts_updated = len(updated_posts)
-
-            if posts_created > 0:
-                logging.info(f"Создано {posts_created} новых постов для канала «{channel_title_for_log}»")
-            
-            if posts_updated > 0:
-                logging.info(f"Обновлено {posts_updated} постов для канала «{channel_title_for_log}»")
-
-            
-
-        except IntegrityError as e:
-            logging.error(f"Ошибка целостности данных для канала {channel_title_for_log}: {e}")
-            await db_session.rollback()
-            worker_stats['errors'] += 1
-        except Exception as e:
-            logging.error(f"Ошибка сохранения постов для канала {channel_title_for_log}: {e}")
-            await db_session.rollback()
-            worker_stats['errors'] += 1
-
-    except ChannelPrivateError:
-        logging.warning(f"Канал '{channel_title_for_log}' приватный или недоступен. Пропускаем.")
-        worker_stats['errors'] += 1
-    except FloodWaitError as e:
-        logging.warning(f"Слишком много запросов от Telethon. Ждем {e.seconds} секунд.")
-        await asyncio.sleep(e.seconds + 5)
-        worker_stats['errors'] += 1
     except Exception as e:
         logging.error(f"Критическая ошибка при обработке «{channel_title_for_log}»: {e}", exc_info=True)
-        await db_session.rollback()
         worker_stats['errors'] += 1
 
 
