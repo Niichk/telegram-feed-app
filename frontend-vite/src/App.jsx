@@ -164,106 +164,97 @@ const PostMedia = React.memo(({ media }) => {
                                     />
                                 )
                             )}
-                            {/* --- ИСПРАВЛЕННЫЙ БЛОК С ВИДЕО --- */}
-                           {item.type === 'video' && (
-                            <div className="video-container">
-                                {item.thumbnail_url ? (
-                                    <>
-                                        {/* Превью как изображение - fallback */}
-                                        <img 
-                                            src={item.thumbnail_url} 
-                                            className="video-thumbnail-overlay" 
-                                            alt="Превью видео"
-                                            loading="lazy"
-                                            onClick={(e) => {
-                                                const container = e.target.parentElement;
-                                                const video = container.querySelector('video');
-                                                const playOverlay = container.querySelector('.video-play-overlay');
-                                                
-                                                e.target.style.display = 'none';
-                                                if (playOverlay) playOverlay.style.display = 'none';
-                                                if (video) {
-                                                    video.classList.remove('video-hidden');
-                                                    video.currentTime = 0; // Сбрасываем на начало
-                                                    video.play();
-                                                }
-                                            }}
-                                            onError={(e) => {
-                                                // Если превью не загрузилось, показываем видео с первым кадром
-                                                e.target.style.display = 'none';
-                                                const container = e.target.parentElement;
-                                                const video = container.querySelector('video');
-                                                if (video) {
-                                                    video.classList.remove('video-hidden');
-                                                    video.load(); // Перезагружаем видео
-                                                }
-                                            }}
-                                        />
-                                        <div 
-                                            className="video-play-overlay"
-                                            onClick={(e) => {
-                                                const container = e.target.closest('.video-container');
-                                                const video = container.querySelector('video');
-                                                const thumbnail = container.querySelector('.video-thumbnail-overlay');
-                                                
-                                                if (thumbnail) thumbnail.style.display = 'none';
-                                                e.target.style.display = 'none';
-                                                if (video) {
-                                                    video.classList.remove('video-hidden');
-                                                    video.currentTime = 0;
-                                                    video.play();
-                                                }
-                                            }}
-                                        >
-                                            <div className="video-play-button">▶️</div>
-                                        </div>
-                                        {/* Видео с принудительной загрузкой первого кадра */}
-                                        <video 
-                                            controls 
-                                            muted 
-                                            playsInline 
-                                            className="post-media-visual video-hidden"
-                                            preload="metadata"
-                                            onLoadedData={(e) => {
-                                                // Когда видео загрузилось, показываем первый кадр
-                                                const video = e.target;
-                                                video.currentTime = 0.1; // Устанавливаем на 0.1 секунды
-                                                
-                                                // Если thumbnail не загрузился, убираем его и показываем видео
-                                                const thumbnail = video.parentElement.querySelector('.video-thumbnail-overlay');
-                                                if (thumbnail && thumbnail.style.display === 'none') {
-                                                    video.classList.remove('video-hidden');
-                                                }
-                                            }}
-                                            onTimeUpdate={(e) => {
-                                                // Останавливаем на первом кадре, если видео не играет
-                                                const video = e.target;
-                                                if (video.currentTime > 0.1 && video.paused) {
-                                                    video.currentTime = 0.1;
-                                                }
-                                            }}
-                                        >
-                                            <source src={item.url} type="video/mp4" />
-                                        </video>
-                                    </>
-                                ) : (
-                                    // Если нет превью, используем только видео с первым кадром
+                            
+                            {item.type === 'video' && (
+                                <div className="video-container">
+                                    {/* Всегда показываем видео как базовый элемент */}
                                     <video 
                                         controls 
                                         muted 
                                         playsInline 
                                         className="post-media-visual"
                                         preload="metadata"
-                                        onLoadedData={(e) => {
-                                            // Показываем первый кадр как превью
-                                            e.target.currentTime = 0.1;
+                                        poster={item.thumbnail_url || undefined}
+                                        onLoadedMetadata={(e) => {
+                                            // Когда видео загрузилось, устанавливаем время на первый кадр
+                                            if (!item.thumbnail_url) {
+                                                e.target.currentTime = 0.1;
+                                            }
+                                        }}
+                                        onError={(e) => {
+                                            console.error('Video failed to load:', item.url);
                                         }}
                                     >
                                         <source src={item.url} type="video/mp4" />
+                                        <source src={item.url} />
+                                        Ваш браузер не поддерживает воспроизведение видео.
                                     </video>
-                                )}
-                            </div>
-                        )}
+                                    
+                                    {/* Если есть отдельное превью - показываем его поверх видео */}
+                                    {item.thumbnail_url && (
+                                        <>
+                                            <img 
+                                                src={item.thumbnail_url} 
+                                                className="video-thumbnail-overlay" 
+                                                alt="Превью видео"
+                                                loading="lazy"
+                                                onLoad={() => {
+                                                    // Превью загрузилось успешно - скрываем видео под ним
+                                                    const container = document.querySelector(`.video-container`);
+                                                    const video = container?.querySelector('video');
+                                                    if (video) {
+                                                        video.classList.add('video-behind-thumbnail');
+                                                    }
+                                                }}
+                                                onClick={(e) => {
+                                                    const container = e.target.parentElement;
+                                                    const video = container.querySelector('video');
+                                                    const playOverlay = container.querySelector('.video-play-overlay');
+                                                    
+                                                    e.target.style.display = 'none';
+                                                    if (playOverlay) playOverlay.style.display = 'none';
+                                                    if (video) {
+                                                        video.classList.remove('video-behind-thumbnail');
+                                                        video.currentTime = 0;
+                                                        video.play();
+                                                    }
+                                                }}
+                                                onError={(e) => {
+                                                    console.log('Thumbnail failed to load, showing video instead');
+                                                    e.target.style.display = 'none';
+                                                    const container = e.target.parentElement;
+                                                    const video = container.querySelector('video');
+                                                    const playOverlay = container.querySelector('.video-play-overlay');
+                                                    
+                                                    if (playOverlay) playOverlay.style.display = 'none';
+                                                    if (video) {
+                                                        video.classList.remove('video-behind-thumbnail');
+                                                        video.currentTime = 0.1; // Показываем первый кадр
+                                                    }
+                                                }}
+                                            />
+                                            <div 
+                                                className="video-play-overlay"
+                                                onClick={(e) => {
+                                                    const container = e.target.closest('.video-container');
+                                                    const video = container.querySelector('video');
+                                                    const thumbnail = container.querySelector('.video-thumbnail-overlay');
+                                                    
+                                                    if (thumbnail) thumbnail.style.display = 'none';
+                                                    e.target.style.display = 'none';
+                                                    if (video) {
+                                                        video.classList.remove('video-behind-thumbnail');
+                                                        video.currentTime = 0;
+                                                        video.play();
+                                                    }
+                                                }}
+                                            >
+                                                <div className="video-play-button">▶️</div>
+                                            </div>
+                                        </>
+                                    )}
+                                </div>
+                            )}
                         </div>
                     ))}
                     {visualMedia.length > 1 && (
@@ -275,7 +266,11 @@ const PostMedia = React.memo(({ media }) => {
                     )}
                 </div>
             )}
-            {audioMedia.map((item, index) => ( <audio key={index} controls className="post-media-audio"><source src={item.url} /></audio> ))}
+            {audioMedia.map((item, index) => (
+                <audio key={index} controls className="post-media-audio">
+                    <source src={item.url} />
+                </audio>
+            ))}
         </>
     );
 });
