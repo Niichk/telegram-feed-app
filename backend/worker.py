@@ -81,88 +81,74 @@ worker_stats = {
 
 def process_text(text: str | None, entities=None) -> str | None:
     """
-    Преобразует текст и entities из Telegram в безопасный HTML,
-    обрабатывая ссылки, форматирование, спойлеры и цитаты.
+    Надежно преобразует текст и entities из Telegram в безопасный HTML.
+    Этот алгоритм не изменяет строку, а собирает новую по частям.
     """
     if not text:
         return None
 
-    # Расширенный список тегов для поддержки спойлеров, цитат и т.д.
-    ALLOWED_TAGS = ['a', 'b', 'strong', 'i', 'em', 'pre', 'code', 'br', 'tg-spoiler', 'u', 's', 'blockquote']
-    ALLOWED_ATTRIBUTES = {'a': ['href', 'title', 'target', 'rel']}
-
     try:
         # Если нет специального форматирования, просто ищем ссылки.
         if not entities:
-            escaped_text = escape(text)
-            def set_link_attrs(attrs, new=False):
-                attrs['target'] = '_blank'
-                attrs['rel'] = 'noopener noreferrer'
-                return attrs
-
+            # Экранируем текст, чтобы обезопасить его, и ищем ссылки
             linked_text = bleach.linkify(
-                escaped_text,
+                escape(text),
                 parse_email=False,
-                callbacks=[set_link_attrs]
+                callbacks=[lambda attrs, new: {**attrs, 'target': '_blank', 'rel': 'noopener noreferrer'}] # type: ignore
             )
             return linked_text.replace('\n', '<br>')
 
-        # Если форматирование есть, применяем его.
-        # Сортируем в обратном порядке, чтобы не сбить индексы при вставке тегов.
-        sorted_entities = sorted(entities, key=lambda e: e.offset, reverse=True)
-        
-        # Сначала экранируем ВЕСЬ текст, чтобы обезопасить его от случайного HTML.
-        result_text = escape(text)
-        
+        # --- Алгоритм сборки строки по частям ---
+        sorted_entities = sorted(entities, key=lambda e: e.offset)
+        result_parts = []
+        last_offset = 0
+
         for entity in sorted_entities:
+            # Добавляем обычный текст, который находится ПЕРЕД форматированием
+            if entity.offset > last_offset:
+                result_parts.append(escape(text[last_offset:entity.offset]))
+
+            # Обрабатываем и добавляем сам фрагмент с форматированием
             start = entity.offset
             end = entity.offset + entity.length
-            original_part = result_text[start:end]
-            replacement = original_part
+            original_part = text[start:end]
+            escaped_part = escape(original_part)
+            
+            replacement = escaped_part
             entity_type = entity.__class__.__name__
-
+            
+            # Превращаем entity в соответствующий HTML-тег
             if entity_type == 'MessageEntityTextLink' and hasattr(entity, 'url'):
-                url = entity.url
-                replacement = f'<a href="{escape(url)}" target="_blank" rel="noopener noreferrer">{original_part}</a>'
+                url = escape(entity.url, quote=True)
+                replacement = f'<a href="{url}" target="_blank" rel="noopener noreferrer">{escaped_part}</a>'
             elif entity_type == 'MessageEntityUrl':
                 url = original_part
-                if not url.startswith(('http://', 'https://')):
+                if '://' not in url:
                     url = 'https://' + url
-                replacement = f'<a href="{escape(url)}" target="_blank" rel="noopener noreferrer">{original_part}</a>'
+                url = escape(url, quote=True)
+                replacement = f'<a href="{url}" target="_blank" rel="noopener noreferrer">{escaped_part}</a>'
             elif entity_type == 'MessageEntityBold':
-                replacement = f'<b>{original_part}</b>'
+                replacement = f'<b>{escaped_part}</b>'
             elif entity_type == 'MessageEntityItalic':
-                replacement = f'<i>{original_part}</i>'
-            elif entity_type == 'MessageEntityCode':
-                replacement = f'<code>{original_part}</code>'
-            elif entity_type == 'MessageEntityPre':
-                replacement = f'<pre>{original_part}</pre>'
+                replacement = f'<i>{escaped_part}</i>'
             elif entity_type == 'MessageEntitySpoiler':
-                replacement = f'<tg-spoiler>{original_part}</tg-spoiler>'
-            elif entity_type == 'MessageEntityUnderline':
-                replacement = f'<u>{original_part}</u>'
-            elif entity_type == 'MessageEntityStrikethrough':
-                replacement = f'<s>{original_part}</s>'
-            elif entity_type == 'MessageEntityBlockquote':
-                 replacement = f'<blockquote>{original_part.replace(chr(10), "<br>")}</blockquote>'
+                replacement = f'<tg-spoiler>{escaped_part}</tg-spoiler>'
+            else:
+                replacement = f'<span>{escaped_part}</span>' # Обертка для других типов
+            
+            result_parts.append(replacement)
+            last_offset = end
 
-            result_text = result_text[:start] + replacement + result_text[end:]
-
-        # Финальная очистка и замена переносов строк.
-        # Заменяем переносы строк на <br> уже после всех операций, чтобы не затронуть <pre>.
-        final_html = result_text.replace('\n', '<br>')
-
-        # Bleach для дополнительной гарантии безопасности
-        return bleach.clean(
-            final_html,
-            tags=ALLOWED_TAGS,
-            attributes=ALLOWED_ATTRIBUTES,
-            strip=False
-        )
-
+        # Добавляем оставшийся кусок текста в конце
+        if last_offset < len(text):
+            result_parts.append(escape(text[last_offset:]))
+            
+        # Собираем все части и заменяем переносы строк
+        final_html = "".join(result_parts)
+        return final_html.replace('\n', '<br>')
+    
     except Exception as e:
         logging.error(f"Критическая ошибка обработки текста: {e}", exc_info=True)
-        # В случае сбоя, возвращаем безопасный, экранированный текст.
         return escape(text).replace('\n', '<br>')
     
 async def save_single_post(db_session: AsyncSession, post: Post, channel_title: str):
