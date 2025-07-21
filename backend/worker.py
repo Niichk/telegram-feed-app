@@ -78,88 +78,88 @@ worker_stats = {
     'errors': 0
 }
 
-def process_telegram_entities(text: str, entities) -> str:
-    """Обрабатывает Telegram entities (ссылки, форматирование) в правильном порядке"""
-    if not entities:
-        return text
-    
-    # Сортируем entities по убыванию offset для корректной замены
-    sorted_entities = sorted(entities, key=lambda e: e.offset, reverse=True)
-    
-    result = text
-    for entity in sorted_entities:
-        start = entity.offset
-        end = entity.offset + entity.length
-        entity_text = result[start:end]
-        
-        if hasattr(entity, 'url') and entity.url:
-            # Текстовая ссылка (гиперссылка) - это то что нам нужно!
-            replacement = f'<a href="{entity.url}" target="_blank" rel="noopener noreferrer">{entity_text}</a>'
-            result = result[:start] + replacement + result[end:]
-        elif entity.__class__.__name__ == 'MessageEntityUrl':
-            # Обычная URL ссылка
-            url = entity_text
-            if not url.startswith(('http://', 'https://')):
-                url = 'https://' + url
-            replacement = f'<a href="{url}" target="_blank" rel="noopener noreferrer">{entity_text}</a>'
-            result = result[:start] + replacement + result[end:]
-        elif entity.__class__.__name__ == 'MessageEntityBold':
-            replacement = f'<b>{entity_text}</b>'
-            result = result[:start] + replacement + result[end:]
-        elif entity.__class__.__name__ == 'MessageEntityItalic':
-            replacement = f'<i>{entity_text}</i>'
-            result = result[:start] + replacement + result[end:]
-        elif entity.__class__.__name__ == 'MessageEntityCode':
-            replacement = f'<code>{entity_text}</code>'
-            result = result[:start] + replacement + result[end:]
-        elif entity.__class__.__name__ == 'MessageEntityPre':
-            replacement = f'<pre>{entity_text}</pre>'
-            result = result[:start] + replacement + result[end:]
-    
-    return result
-
 def process_text(text: str | None, entities=None) -> str | None:
-    """Полный цикл обработки текста с учетом Telegram entities"""
+    """
+    Преобразует текст и entities из Telegram в безопасный HTML.
+    1.  Если entities нет, просто ищет ссылки и заменяет их на теги <a>.
+    2.  Если entities есть, вставляет HTML-теги (<a>, <b>, <i> и т.д.)
+        в нужные позиции текста.
+    3.  Очищает итоговый HTML с помощью bleach для защиты от XSS.
+    """
     if not text:
         return None
-    
+
+    # Настройки для очистки HTML
+    ALLOWED_TAGS = ['a', 'b', 'strong', 'i', 'em', 'pre', 'code', 'br']
+    ALLOWED_ATTRIBUTES = {'a': ['href', 'title', 'target', 'rel']}
+
     try:
-        # ГЛАВНОЕ ИСПРАВЛЕНИЕ: Сначала обрабатываем Telegram entities
-        if entities:
-            processed_text = process_telegram_entities(text, entities)
-        else:
-            processed_text = text
+        if not entities:
+            # Просто находим и оборачиваем все ссылки, если нет entities
+            # Это самый простой случай: обычный текст с URL-адресами
+            def set_link_attrs(attrs, new=False):
+                attrs['target'] = '_blank'
+                attrs['rel'] = 'noopener noreferrer'
+                return attrs
+
+            safe_html = bleach.linkify(
+                bleach.clean(text, tags=[], strip=True), # Сначала очищаем от любого HTML
+                parse_email=False,
+                callbacks=[set_link_attrs]
+            )
+            return safe_html.replace('\n', '<br>')
+
+
+        # --- Если entities есть, применяем их к тексту ---
         
-        # Затем обрабатываем оставшиеся ссылки (если entities не покрыли все)
-        import re
-        url_pattern = r'(?<!href=")(?<!href=\')(?<!<a [^>]*>)(https?://[^\s<>"\'()]+|www\.[^\s<>"\'()]+)(?![^<]*</a>)'
+        # Сортируем entities по позиции в тексте в обратном порядке
+        # Это нужно, чтобы вставка тегов не сбивала индексы для следующих entities
+        sorted_entities = sorted(entities, key=lambda e: e.offset, reverse=True)
         
-        def replace_url(match):
-            url = match.group(0)
-            original_url = url
+        result_text = text
+        for entity in sorted_entities:
+            start = entity.offset
+            end = entity.offset + entity.length
+            original_part = result_text[start:end]
+
+            replacement = original_part
+            entity_type = entity.__class__.__name__
+
+            if entity_type == 'MessageEntityTextLink' and hasattr(entity, 'url'):
+                # Вшитая ссылка: <a href="url">текст</a>
+                url = entity.url
+                replacement = f'<a href="{url}" target="_blank" rel="noopener noreferrer">{original_part}</a>'
+            elif entity_type == 'MessageEntityUrl':
+                # Обычная ссылка: <a href="url">url</a>
+                url = original_part
+                if not url.startswith(('http://', 'https://')):
+                    url = 'https://' + url
+                replacement = f'<a href="{url}" target="_blank" rel="noopener noreferrer">{original_part}</a>'
+            elif entity_type == 'MessageEntityBold':
+                replacement = f'<b>{original_part}</b>'
+            elif entity_type == 'MessageEntityItalic':
+                replacement = f'<i>{original_part}</i>'
+            elif entity_type == 'MessageEntityCode':
+                 replacement = f'<code>{original_part}</code>'
+            elif entity_type == 'MessageEntityPre':
+                replacement = f'<pre>{original_part}</pre>'
             
-            if not url.startswith(('http://', 'https://')):
-                url = 'https://' + url
-            
-            return f'<a href="{url}" target="_blank" rel="noopener noreferrer">{original_url}</a>'
-        
-        # Применяем только если ссылка еще не в теге <a>
-        html_with_links = re.sub(url_pattern, replace_url, processed_text)
-        
-        # Очищаем получившийся HTML для защиты от XSS
+            # Заменяем оригинальную часть текста на новую, с HTML-тегами
+            result_text = result_text[:start] + replacement + result_text[end:]
+
+        # Финальная очистка и замена переносов строк
         safe_html = bleach.clean(
-            html_with_links, 
-            tags=ALLOWED_TAGS + ['a'], 
-            attributes={'a': ['href', 'target', 'rel']},
+            result_text,
+            tags=ALLOWED_TAGS,
+            attributes=ALLOWED_ATTRIBUTES,
             strip=False
         )
-        
-        return safe_html
-        
+        return safe_html.replace('\n', '<br>')
+
     except Exception as e:
         logging.error(f"Ошибка обработки текста: {e}")
-        # Fallback: просто очищаем от XSS
-        return bleach.clean(text, tags=ALLOWED_TAGS, attributes={})
+        # В случае ошибки, возвращаем текст как есть, очищенный от HTML
+        return bleach.clean(text, tags=[], strip=True).replace('\n', '<br>')
     
 async def save_single_post(db_session: AsyncSession, post: Post, channel_title: str):
     """Сохраняет один пост немедленно"""
