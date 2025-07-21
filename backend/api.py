@@ -3,6 +3,7 @@ import hashlib
 import os
 import json
 import logging
+import asyncio
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Header, Depends, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,6 +18,7 @@ from worker import backfill_user_channels
 
 from fastapi_cache import FastAPICache
 from fastapi_cache.backends.redis import RedisBackend
+from fastapi.responses import StreamingResponse
 from fastapi_cache.decorator import cache
 from redis import asyncio as aioredis
 
@@ -62,6 +64,7 @@ else:
     "http://127.0.0.1",
 ]
 
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # ВРЕМЕННО: разрешаем все источники для отладки
@@ -90,6 +93,18 @@ def is_valid_tma_data(init_data: str) -> dict | None:
     except Exception:
         return None
 
+@app.get("/api/feed/stream/{user_id}")
+async def stream_user_posts(user_id: int):
+    """Потоковая передача новых постов"""
+    async def generate():
+        # Здесь логика для отправки постов по мере их появления
+        # Можно использовать WebSockets или Server-Sent Events
+        while True:
+            # Проверяем новые посты для пользователя
+            await asyncio.sleep(2)  # Проверяем каждые 2 секунды
+            yield f"data: {json.dumps({'status': 'checking'})}\n\n"
+    
+    return StreamingResponse(generate(), media_type="text/plain")
 
 @app.get("/api/subscriptions/", response_model=schemas.SubscriptionResponse)
 @limiter.limit("30/minute")
@@ -171,3 +186,17 @@ async def get_feed_for_user(
 @app.get("/health")
 async def health_check():
     return {"status": "ok", "message": "API работает"}
+
+@app.post("/api/internal/channel-added")
+async def notify_channel_added(
+    user_id: int,
+    channel_id: int,
+    authorization: str | None = Header(None)
+):
+    """Внутренний endpoint для уведомления о добавлении канала"""
+    if authorization != f"Bearer {BOT_TOKEN}":
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    
+    # Можно добавить логику для немедленной обработки нового канала
+    logging.info(f"Получено уведомление о добавлении канала {channel_id} для пользователя {user_id}")
+    return {"status": "ok"}

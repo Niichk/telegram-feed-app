@@ -84,10 +84,22 @@ def process_text(text: str | None) -> str | None:
         return None
     
     try:
-        # Сначала обрабатываем markdown
+        # ИСПРАВЛЕНИЕ: Сначала проверяем, есть ли уже HTML-теги в тексте
+        if '<a href=' in text and '</a>' in text:
+            # Текст уже содержит готовые HTML ссылки от Telegram
+            # Просто очищаем от XSS и возвращаем
+            safe_html = bleach.clean(
+                text,
+                tags=ALLOWED_TAGS + ['a'],  # Разрешаем теги ссылок
+                attributes={'a': ['href', 'target', 'rel']},  # Разрешаем атрибуты ссылок
+                strip=False
+            )
+            return safe_html
+        
+        # Если готовых HTML ссылок нет - обрабатываем как обычно
         html = md.renderInline(text)
         
-        # Улучшенная обработка ссылок
+        # Улучшенная обработка ссылок только для plain text
         import re
         
         # Более точный regex для поиска URL
@@ -101,41 +113,60 @@ def process_text(text: str | None) -> str | None:
             if not url.startswith(('http://', 'https://')):
                 url = 'https://' + url
             
-            # ИСПРАВЛЕНИЕ: Возвращаем ссылку с правильным отображением
             return f'<a href="{url}" target="_blank" rel="noopener noreferrer">{original_url}</a>'
         
-        # Применяем замену URL
+        # Применяем замену URL только если это не HTML уже
         html_with_links = re.sub(url_pattern, replace_url, html)
         
         # Очищаем получившийся HTML для защиты от XSS
         safe_html = bleach.clean(
             html_with_links, 
-            tags=ALLOWED_TAGS, 
-            attributes=ALLOWED_ATTRIBUTES,
-            strip=False  # Не удаляем теги, а экранируем
+            tags=ALLOWED_TAGS + ['a'], 
+            attributes={'a': ['href', 'target', 'rel']},
+            strip=False
         )
         
         return safe_html
         
     except Exception as e:
         logging.error(f"Ошибка обработки текста: {e}")
-        # Fallback: улучшенная обработка ссылок
-        import re
+        # Fallback: просто очищаем от XSS
+        return bleach.clean(text, tags=ALLOWED_TAGS + ['a'], attributes={'a': ['href', 'target', 'rel']})
+    
+async def save_single_post(db_session: AsyncSession, post: Post, channel_title: str):
+    """Сохраняет один пост немедленно"""
+    try:
+        from sqlalchemy.dialects.postgresql import insert
         
-        # Тот же улучшенный паттерн для fallback
-        url_pattern = r'(https?://[^\s<>"\'()]+(?:\([^\s<>"\'()]*\))*[^\s<>"\'().,;:]|www\.[^\s<>"\'()]+(?:\([^\s<>"\'()]*\))*[^\s<>"\'().,;:])'
+        stmt = insert(Post).values(
+            channel_id=post.channel_id,
+            message_id=post.message_id,
+            text=post.text,
+            date=post.date,
+            grouped_id=post.grouped_id,
+            media=post.media,
+            views=post.views,
+            reactions=post.reactions,
+            forwarded_from=post.forwarded_from
+        )
         
-        def replace_url(match):
-            url = match.group(1)
-            original_url = url
-            
-            if not url.startswith(('http://', 'https://')):
-                url = 'https://' + url
-            
-            return f'<a href="{url}" target="_blank" rel="noopener noreferrer">{original_url}</a>'
+        stmt = stmt.on_conflict_do_update(
+            constraint='_channel_message_uc',
+            set_=dict(
+                views=stmt.excluded.views,
+                reactions=stmt.excluded.reactions,
+                updated_at=func.now()
+            )
+        )
         
-        processed = re.sub(url_pattern, replace_url, text)
-        return bleach.clean(processed, tags=ALLOWED_TAGS, attributes=ALLOWED_ATTRIBUTES)
+        await db_session.execute(stmt)
+        await db_session.commit()
+        logging.info(f"Сохранен пост {post.message_id} из канала «{channel_title}»")
+        return True
+    except Exception as e:
+        logging.error(f"Ошибка сохранения поста {post.message_id}: {e}")
+        await db_session.rollback()
+        return False
 
 async def get_cached_entity(channel: Channel):
     """Получает entity с кэшированием"""
@@ -372,29 +403,47 @@ async def process_grouped_messages(grouped_messages, channel_id_for_log, db_sess
     )
     return new_post
 
-async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, post_limit: int = 10, offset_id: int = 0):
+async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, post_limit: int = 10, offset_id: int = 0, real_time_save: bool = False):
+    """
+    Получает посты из канала и сохраняет их в базу данных.
+    
+    Args:
+        channel: Объект канала из базы данных
+        db_session: Сессия базы данных
+        post_limit: Лимит постов для загрузки
+        offset_id: ID сообщения для offset (для пагинации)
+        real_time_save: Флаг для сохранения постов в реальном времени
+    """
     channel_id_for_log = channel.id
     channel_title_for_log = channel.title
 
     try:
         entity = await get_cached_entity(channel)
-        if not entity: return
+        if not entity: 
+            logging.warning(f"Не удалось получить entity для канала {channel_title_for_log}")
+            return
 
-        new_posts, updated_posts, grouped_messages = [], [], {}
+        new_posts = []
+        updated_posts = []
+        grouped_messages = {}
 
+        # Итерируемся по сообщениям канала
         async for message in client.iter_messages(entity, limit=post_limit, offset_id=offset_id):
             if not message or (not message.text and not message.media and not message.poll):
                 continue
             
+            # Обрабатываем групповые сообщения (альбомы) отдельно
             if message.grouped_id:
                 grouped_messages.setdefault(message.grouped_id, []).append(message)
                 continue
 
+            # Проверяем, существует ли пост в базе данных
             existing_post = await db_session.scalar(
                 select(Post).where(Post.channel_id == channel_id_for_log, Post.message_id == message.id)
             )
             
             if existing_post:
+                # Обновляем существующий пост
                 needs_update = False
                 
                 # Проверка просмотров
@@ -415,7 +464,7 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                                 reaction_data["document_id"] = r.reaction.document_id
                             new_reactions.append(reaction_data)
                 
-                # Сравнение без учета порядка
+                # Сравнение реакций без учета порядка
                 if sorted(existing_post.reactions or [], key=lambda x: str(x)) != sorted(new_reactions, key=lambda x: str(x)):
                     existing_post.reactions = new_reactions
                     needs_update = True
@@ -428,11 +477,13 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
 
                 if needs_update:
                     updated_posts.append(existing_post)
+
             else:
-                # Создание нового поста
+                # Создаем новый пост
                 processed_text = process_text(message.text)
                 media_item = await upload_media_to_s3(message, channel_id_for_log)
                 
+                # Обработка реакций
                 reactions_data = []
                 if message.reactions and message.reactions.results:
                     for r in message.reactions.results:
@@ -444,6 +495,7 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                                 reaction_data["document_id"] = r.reaction.document_id
                             reactions_data.append(reaction_data)
                 
+                # Обработка пересланных сообщений
                 forward_data = None
                 if message.fwd_from:
                     try:
@@ -456,9 +508,11 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                             forward_data = {"from_name": from_name, "username": username, "channel_id": channel_id}
                         elif hasattr(message.fwd_from, 'from_name') and message.fwd_from.from_name:
                             forward_data = {"from_name": message.fwd_from.from_name, "username": None, "channel_id": None}
-                    except Exception:
+                    except Exception as e:
+                        logging.warning(f"Не удалось получить entity для репоста: {e}")
                         forward_data = {"from_name": "Недоступный источник", "username": None, "channel_id": None}
                 
+                # Создаем объект поста
                 new_post = Post(
                     channel_id=channel_id_for_log,
                     message_id=message.id,
@@ -471,21 +525,31 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                 )
                 new_posts.append(new_post)
 
-        # Обработка групповых сообщений
+                # Сохранение в реальном времени (если включено)
+                if real_time_save:
+                    await save_single_post(db_session, new_post, channel_title_for_log)
+
+        # Обработка групповых сообщений (альбомов)
         for group_id, messages in grouped_messages.items():
             if not messages:
                 continue
 
+            # Проверяем, существует ли групповой пост
             existing_group_post = await db_session.scalar(
                 select(Post).where(Post.grouped_id == group_id)
             )
 
             if not existing_group_post:
+                # Создаем новый групповой пост
                 group_post = await process_grouped_messages(messages, channel_id_for_log, db_session)
                 if group_post:
                     new_posts.append(group_post)
+                    
+                    # Сохранение в реальном времени для групповых постов
+                    if real_time_save:
+                        await save_single_post(db_session, group_post, channel_title_for_log)
             else:
-                # Обновление группового поста
+                # Обновляем существующий групповой пост
                 main_message = messages[0]
                 needs_update = False
                 
@@ -497,8 +561,8 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                 if needs_update:
                     updated_posts.append(existing_group_post)
 
-        # ИСПРАВЛЕНИЕ: Сохранение вынесено за пределы циклов
-        if new_posts or updated_posts:
+        # Сохранение в базу данных (только если не используется real_time_save)
+        if not real_time_save and (new_posts or updated_posts):
             try:
                 if new_posts:
                     from sqlalchemy.dialects.postgresql import insert
@@ -531,7 +595,7 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                     await db_session.commit()
                     logging.info(f"Создано/обновлено {len(new_posts)} постов для «{channel_title_for_log}»")
                 
-                # Обычные обновления остаются как есть
+                # Сохранение обновлений существующих постов
                 if updated_posts:
                     await db_session.commit()
                     logging.info(f"Обновлено {len(updated_posts)} постов в «{channel_title_for_log}»")
@@ -540,12 +604,25 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                 logging.error(f"Ошибка сохранения постов для «{channel_title_for_log}»: {e}")
                 await db_session.rollback()
                 worker_stats['errors'] += 1
+                raise  # Поднимаем ошибку выше для корректной обработки
         else:
-            logging.info(f"Нет изменений для канала «{channel_title_for_log}»")
+            if not real_time_save:
+                logging.info(f"Нет изменений для канала «{channel_title_for_log}»")
 
+        # Обновляем статистику
+        worker_stats['processed_posts'] += len(new_posts)
+
+    except ChannelPrivateError:
+        logging.warning(f"Канал «{channel_title_for_log}» стал приватным или недоступным")
+        worker_stats['errors'] += 1
+    except FloodWaitError as e:
+        logging.warning(f"Flood wait для канала «{channel_title_for_log}»: {e.seconds} секунд")
+        await asyncio.sleep(e.seconds)
+        worker_stats['errors'] += 1
     except Exception as e:
         logging.error(f"Критическая ошибка при обработке «{channel_title_for_log}»: {e}", exc_info=True)
         worker_stats['errors'] += 1
+        raise  # Поднимаем ошибку для обработки в вызывающем коде
 
 
 async def process_channel_safely(channel: Channel, semaphore: asyncio.Semaphore, post_limit: int):

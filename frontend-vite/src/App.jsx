@@ -180,49 +180,49 @@ const PostMedia = React.memo(({ media }) => {
                             )}
                             
                             {item.type === 'video' && (
-                            <div className="video-container">
-                                <video 
-                                    muted 
-                                    playsInline 
-                                    className="post-media-visual"
-                                    preload="metadata"
-                                    poster={item.thumbnail_url || undefined}
-                                    // ИСПРАВЛЕНИЕ: НЕ показываем контролы до первого клика
-                                    controls={false}  // ← Важно! Отключаем нативные контролы
-                                    onLoadedMetadata={(e) => {
-                                        if (!item.thumbnail_url) {
-                                            e.target.currentTime = 0.1;
-                                        }
-                                    }}
-                                    onError={(e) => {
-                                        console.error('Video failed to load:', item.url);
-                                    }}
-                                >
-                                    <source src={item.url} type="video/mp4" />
-                                    <source src={item.url} />
-                                    Ваш браузер не поддерживает воспроизведение видео.
-                                </video>
-                                
-                                {/* ЕДИНСТВЕННАЯ кнопка play - показываем всегда для видео */}
-                                <div 
-                                    className="video-play-overlay"
-                                    onClick={(e) => {
-                                        const container = e.target.closest('.video-container');
-                                        const video = container.querySelector('video');
-                                        
-                                        // Скрываем нашу кнопку и включаем нативные контролы
-                                        e.target.style.display = 'none';
-                                        if (video) {
-                                            video.controls = true;  // ← Включаем контролы после клика
-                                            video.currentTime = 0;
-                                            video.play();
-                                        }
-                                    }}
-                                >
-                                    <div className="video-play-button">▶️</div>
+                                <div className="video-container">
+                                    <video 
+                                        muted 
+                                        playsInline 
+                                        className="post-media-visual"
+                                        preload="metadata"
+                                        poster={item.thumbnail_url || undefined}
+                                        // ИСПРАВЛЕНИЕ: НЕ показываем контролы до первого клика
+                                        controls={false}  // ← Важно! Отключаем нативные контролы
+                                        onLoadedMetadata={(e) => {
+                                            if (!item.thumbnail_url) {
+                                                e.target.currentTime = 0.1;
+                                            }
+                                        }}
+                                        onError={(e) => {
+                                            console.error('Video failed to load:', item.url);
+                                        }}
+                                    >
+                                        <source src={item.url} type="video/mp4" />
+                                        <source src={item.url} />
+                                        Ваш браузер не поддерживает воспроизведение видео.
+                                    </video>
+                                    
+                                    {/* ЕДИНСТВЕННАЯ кнопка play - показываем всегда для видео */}
+                                    <div 
+                                        className="video-play-overlay"
+                                        onClick={(e) => {
+                                            const container = e.target.closest('.video-container');
+                                            const video = container.querySelector('video');
+                                            
+                                            // Скрываем нашу кнопку и включаем нативные контролы
+                                            e.target.style.display = 'none';
+                                            if (video) {
+                                                video.controls = true;  // ← Включаем контролы после клика
+                                                video.currentTime = 0;
+                                                video.play();
+                                            }
+                                        }}
+                                    >
+                                        <div className="video-play-button">▶️</div>
+                                    </div>
                                 </div>
-                            </div>
-                        )}
+                            )}
                         </div>
                     ))}
                     {visualMedia.length > 1 && (
@@ -298,6 +298,7 @@ function App() {
     const [initialLoading, setInitialLoading] = useState(true);
     const [isBackfilling, setIsBackfilling] = useState(false);
     const [hasSubscriptions, setHasSubscriptions] = useState(false);
+    const [isLoadingNewChannel, setIsLoadingNewChannel] = useState(false);
     
     const page = useRef(1);
     const loader = useRef(null);
@@ -316,7 +317,6 @@ function App() {
     const checkSubscriptions = useCallback(async () => {
         try {
             const response = await fetch(
-                // Убедись, что URL правильный для твоего деплоя
                 `https://telegram-feed-app-production.up.railway.app/api/subscriptions/`, 
                 {
                     headers: { 'Authorization': `tma ${window.Telegram.WebApp.initData}` }
@@ -333,6 +333,83 @@ function App() {
             // В случае ошибки просто выводим ее в консоль, чтобы не ломать приложение
             console.error("Failed to check subscriptions:", err);
         }
+    }, []);
+
+    // ДОБАВЛЕНО: Функция для обновления статуса подписок
+    const updateSubscriptionStatus = useCallback(async () => {
+        try {
+            const response = await fetch(
+                `https://telegram-feed-app-production.up.railway.app/api/subscriptions/`, 
+                {
+                    headers: { 'Authorization': `tma ${window.Telegram.WebApp.initData}` }
+                }
+            );
+            if (response.ok) {
+                const data = await response.json();
+                const hasChannels = data.channels && data.channels.length > 0;
+                const hadSubscriptionsBefore = hasSubscriptions;
+                setHasSubscriptions(hasChannels);
+                
+                // ИСПРАВЛЕНИЕ: Если появились новые подписки - запускаем реалтайм
+                if (hasChannels && !hadSubscriptionsBefore) {
+                    startRealtimeUpdates(); // ← ДОБАВЛЕНО
+                }
+                
+                // ВАЖНО: Если есть подписки, но нет постов - запускаем загрузку
+                if (hasChannels && posts.length === 0 && !isFetching) {
+                    fetchPosts(true);
+                }
+            }
+        } catch (err) {
+            console.error("Failed to update subscription status:", err);
+        }
+    }, [posts.length, isFetching, hasSubscriptions, startRealtimeUpdates, fetchPosts]);
+
+    // ДОБАВЛЕНО: Функция для реалтайм обновлений после добавления канала
+    const startRealtimeUpdates = useCallback(() => {
+        if (!window.Telegram?.WebApp?.initDataUnsafe?.user?.id) return;
+        
+        setIsLoadingNewChannel(true);
+        
+        // Запускаем периодическую проверку новых постов
+        const checkInterval = setInterval(async () => {
+            try {
+                const response = await fetch(
+                    `https://telegram-feed-app-production.up.railway.app/api/feed/?page=1`, 
+                    {
+                        headers: { 'Authorization': `tma ${window.Telegram.WebApp.initData}` }
+                    }
+                );
+                
+                if (response.ok) {
+                    const { posts: freshPosts } = await response.json();
+                    
+                    setPosts(current => {
+                        const newUniquePosts = freshPosts.filter(newPost => 
+                            !current.some(existingPost => 
+                                existingPost.channel.id === newPost.channel.id && 
+                                existingPost.message_id === newPost.message_id
+                            )
+                        );
+                        
+                        if (newUniquePosts.length > 0) {
+                            setIsLoadingNewChannel(false);
+                            return [...newUniquePosts, ...current];
+                        }
+                        return current;
+                    });
+                }
+            } catch (err) {
+                console.error('Realtime update error:', err);
+            }
+        }, 3000); // Проверяем каждые 3 секунды
+        
+        // Останавливаем через 2 минуты
+        setTimeout(() => {
+            clearInterval(checkInterval);
+            setIsLoadingNewChannel(false);
+        }, 120000);
+        
     }, []);
 
     const fetchPosts = useCallback(async (isRefresh = false) => {
@@ -425,12 +502,8 @@ function App() {
         const tg = window.Telegram.WebApp;
         const init = () => {
             if (tg && tg.initData) {
-                
-                // fetchPosts().finally(() => setInitialLoading(false));
-
                 checkSubscriptions(); // Проверяем подписки
                 fetchPosts();       // Начинаем загрузку постов
-                
             } else {
                 setError("Не удалось определить пользователя Telegram. Откройте приложение через бота.");
                 setInitialLoading(false);
@@ -451,7 +524,19 @@ function App() {
                 clearTimeout(window.refreshTimeout);
             }
         };
-    }, [fetchPosts]);
+    }, [fetchPosts, checkSubscriptions]);
+
+    // ДОБАВЛЕНО: Периодическая проверка подписок
+    useEffect(() => {
+        // Проверяем подписки каждые 30 секунд если нет постов
+        const interval = setInterval(() => {
+            if (posts.length === 0 && !isFetching && !initialLoading) {
+                updateSubscriptionStatus();
+            }
+        }, 30000); // 30 секунд
+
+        return () => clearInterval(interval);
+    }, [posts.length, isFetching, initialLoading, updateSubscriptionStatus]);
 
     useEffect(() => {
         const indicator = document.getElementById('refresh-indicator');
@@ -546,12 +631,17 @@ function App() {
     }
     
     if (posts.length === 0 && !isFetching && !initialLoading) {
-        if (hasSubscriptions) {
-            // Если постов нет, но мы знаем, что подписки есть, показываем скелетоны
+        if (hasSubscriptions || isLoadingNewChannel) {
+            // Показываем скелетоны если есть подписки ИЛИ идет загрузка нового канала
             return (
                 <>
                     <Header onRefresh={handleRefresh} onScrollUp={scrollToTop} />
                     <div className="feed-container">
+                        {isLoadingNewChannel && (
+                            <div className="status-message">
+                                Загружаем посты из нового канала... 📥
+                            </div>
+                        )}
                         {[...Array(3)].map((_, i) => <SkeletonCard key={i} />)}
                     </div>
                 </>
@@ -561,7 +651,6 @@ function App() {
             return <div className="status-message">Ваша лента пока пуста. Добавьте каналы через бота!</div>;
         }
     }
-    // ----------------------
 
     return (
         <>
