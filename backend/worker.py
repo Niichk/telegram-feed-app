@@ -79,45 +79,39 @@ worker_stats = {
     'errors': 0
 }
 
-def process_text(text: str | None, entities=None) -> str | None:
+def process_text(raw_text: str | None, entities=None) -> str | None:
     """
-    Надежно преобразует текст и entities из Telegram в безопасный HTML.
-    Этот алгоритм не изменяет строку, а собирает новую по частям.
+    Надежно преобразует сырой текст и entities из Telegram в безопасный HTML.
+    Использует алгоритм сборки по частям для максимальной надежности.
     """
-    if not text:
+    if not raw_text:
         return None
 
     try:
-        # Если нет специального форматирования, просто ищем ссылки.
         if not entities:
-            # Экранируем текст, чтобы обезопасить его, и ищем ссылки
             linked_text = bleach.linkify(
-                escape(text),
+                escape(raw_text),
                 parse_email=False,
                 callbacks=[lambda attrs, new: {**attrs, 'target': '_blank', 'rel': 'noopener noreferrer'}] # type: ignore
             )
             return linked_text.replace('\n', '<br>')
 
-        # --- Алгоритм сборки строки по частям ---
         sorted_entities = sorted(entities, key=lambda e: e.offset)
         result_parts = []
         last_offset = 0
 
         for entity in sorted_entities:
-            # Добавляем обычный текст, который находится ПЕРЕД форматированием
             if entity.offset > last_offset:
-                result_parts.append(escape(text[last_offset:entity.offset]))
+                result_parts.append(escape(raw_text[last_offset:entity.offset]))
 
-            # Обрабатываем и добавляем сам фрагмент с форматированием
             start = entity.offset
             end = entity.offset + entity.length
-            original_part = text[start:end]
+            original_part = raw_text[start:end]
             escaped_part = escape(original_part)
             
             replacement = escaped_part
             entity_type = entity.__class__.__name__
             
-            # Превращаем entity в соответствующий HTML-тег
             if entity_type == 'MessageEntityTextLink' and hasattr(entity, 'url'):
                 url = escape(entity.url, quote=True)
                 replacement = f'<a href="{url}" target="_blank" rel="noopener noreferrer">{escaped_part}</a>'
@@ -133,23 +127,29 @@ def process_text(text: str | None, entities=None) -> str | None:
                 replacement = f'<i>{escaped_part}</i>'
             elif entity_type == 'MessageEntitySpoiler':
                 replacement = f'<tg-spoiler>{escaped_part}</tg-spoiler>'
-            else:
-                replacement = f'<span>{escaped_part}</span>' # Обертка для других типов
+            elif entity_type == 'MessageEntityCode':
+                replacement = f'<code>{escaped_part}</code>'
+            elif entity_type == 'MessageEntityPre':
+                replacement = f'<pre>{escaped_part}</pre>'
+            elif entity_type == 'MessageEntityUnderline':
+                replacement = f'<u>{escaped_part}</u>'
+            elif entity_type == 'MessageEntityStrikethrough':
+                replacement = f'<s>{escaped_part}</s>'
+            elif entity_type == 'MessageEntityBlockquote':
+                 replacement = f'<blockquote>{escaped_part.replace(chr(10), "<br>")}</blockquote>'
             
             result_parts.append(replacement)
             last_offset = end
 
-        # Добавляем оставшийся кусок текста в конце
-        if last_offset < len(text):
-            result_parts.append(escape(text[last_offset:]))
+        if last_offset < len(raw_text):
+            result_parts.append(escape(raw_text[last_offset:]))
             
-        # Собираем все части и заменяем переносы строк
         final_html = "".join(result_parts)
         return final_html.replace('\n', '<br>')
     
     except Exception as e:
         logging.error(f"Критическая ошибка обработки текста: {e}", exc_info=True)
-        return escape(text).replace('\n', '<br>')
+        return escape(raw_text).replace('\n', '<br>')
     
 async def save_single_post(db_session: AsyncSession, post: Post, channel_title: str):
     """Сохраняет один пост немедленно"""
@@ -407,7 +407,7 @@ async def process_grouped_messages(grouped_messages, channel_id_for_log, db_sess
             logging.warning(f"Не удалось получить entity для репоста в альбоме: {e}")
             forward_data = {"from_name": "Недоступный источник", "username": None, "channel_id": None}
 
-    processed_text = process_text(main_message.text, main_message.entities)
+    processed_text = process_text(main_message.raw_text, main_message.entities)
     
     new_post = Post(
         channel_id=channel_id_for_log,
@@ -482,7 +482,7 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                     needs_update = True
                 
                 # ИСПРАВЛЕНИЕ: Проверка текста с entities
-                new_text = process_text(message.text, message.entities)
+                new_text = process_text(message.raw_text, message.entities)
                 if existing_post.text != (new_text if new_text is not None else ""):
                     existing_post.text = new_text if new_text is not None else ""
                     needs_update = True
@@ -492,7 +492,7 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
 
             else:
                 # ИСПРАВЛЕНИЕ: Создаем новый пост с entities
-                processed_text = process_text(message.text, message.entities)
+                processed_text = process_text(message.raw_text, message.entities)
                 media_item = await upload_media_to_s3(message, channel_id_for_log)
                 
                 # Обработка реакций
