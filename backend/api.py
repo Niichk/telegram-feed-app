@@ -8,12 +8,16 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Header, Depends, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, AsyncGenerator
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from urllib.parse import parse_qsl
 
 from database import requests as db
 from database import schemas
 from database.engine import create_db, session_maker
+from database.models import Post
+from database.schemas import PostInFeed
 from worker import backfill_user_channels
 
 from fastapi_cache import FastAPICache
@@ -64,6 +68,7 @@ else:
     "http://127.0.0.1",
 ]
 
+redis_subscriber = aioredis.from_url(REDIS_URL, decode_responses=True) if REDIS_URL else None
 
 app.add_middleware(
     CORSMiddleware,
@@ -92,19 +97,92 @@ def is_valid_tma_data(init_data: str) -> dict | None:
         return None
     except Exception:
         return None
-
-@app.get("/api/feed/stream/{user_id}")
-async def stream_user_posts(user_id: int):
-    """Потоковая передача новых постов"""
-    async def generate():
-        # Здесь логика для отправки постов по мере их появления
-        # Можно использовать WebSockets или Server-Sent Events
-        while True:
-            # Проверяем новые посты для пользователя
-            await asyncio.sleep(2)  # Проверяем каждые 2 секунды
-            yield f"data: {json.dumps({'status': 'checking'})}\n\n"
     
-    return StreamingResponse(generate(), media_type="text/plain")
+def feed_key_builder(
+    func,
+    namespace: str = "",
+    *,
+    request: Request | None = None,
+    response=None,
+    args=(),
+    kwargs=None,
+):
+    """
+    Создает уникальный ключ кэша для ленты пользователя.
+    Ключ включает ID пользователя, чтобы ленты не перемешивались.
+    """
+    if request is None:
+        return f"{namespace}:no-request"
+    # Получаем user_id точно так же, как в самом эндпоинте
+    auth_header = request.headers.get("authorization")
+    user_id = "anonymous" # по умолчанию
+    if auth_header and auth_header.startswith("tma "):
+        init_data = auth_header.split(" ", 1)[1]
+        validated_data = is_valid_tma_data(init_data)
+        if validated_data:
+            try:
+                user_info = json.loads(validated_data['user'])
+                user_id = user_info['id']
+            except (KeyError, json.JSONDecodeError):
+                user_id = "invalid_user"
+
+    # Создаем ключ из префикса, пути, ID пользователя и параметров запроса (например, номера страницы)
+    return f"{namespace}:{request.url.path}:{user_id}:{request.query_params}"
+
+@app.get("/api/feed/stream/") # Убрали user_id из URL, получим его из авторизации
+async def stream_user_posts(
+    session: AsyncSession = Depends(get_db_session),
+    authorization: str | None = Header(None)
+):
+    # 1. Валидация пользователя (такая же, как в /api/feed/)
+    if not authorization or not authorization.startswith("tma ") or not redis_subscriber:
+        raise HTTPException(status_code=401, detail="Not authorized or Redis not configured")
+
+    validated_data = is_valid_tma_data(authorization.split(" ", 1)[1])
+    if not validated_data:
+        raise HTTPException(status_code=403, detail="Invalid hash")
+    
+    try:
+        user_id = json.loads(validated_data['user'])['id']
+    except (KeyError, json.JSONDecodeError):
+        raise HTTPException(status_code=403, detail="Invalid user data")
+
+    # 2. Функция-генератор для SSE
+    async def event_generator():
+        # Подписываемся на личный канал уведомлений пользователя
+        channel_name = f"user_feed:{user_id}"
+        if not redis_subscriber:
+            logging.error("Redis subscriber is not configured.")
+            return
+        pubsub = redis_subscriber.pubsub()
+        await pubsub.subscribe(channel_name)
+        
+        try:
+            # Бесконечный цикл для ожидания сообщений
+            while True:
+                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=15)
+                if message:
+                    post_id = int(message['data'])
+                    
+                    # Получаем свежий пост из БД
+                    fresh_post_query = select(Post).options(selectinload(Post.channel)).where(Post.id == post_id)
+                    post = (await session.execute(fresh_post_query)).scalars().first()
+                    
+                    if post:
+                        # Формируем JSON в формате, который ожидает фронтенд
+                        post_data = PostInFeed.model_validate(post).model_dump_json()
+                        # Отправляем событие клиенту
+                        yield f"data: {post_data}\n\n"
+                
+                # Проверка, что клиент еще подключен
+                await asyncio.sleep(0.1)
+
+        except asyncio.CancelledError:
+            logging.info(f"Client {user_id} disconnected.")
+            await pubsub.unsubscribe(channel_name)
+            raise
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 @app.get("/api/subscriptions/", response_model=schemas.SubscriptionResponse)
 @limiter.limit("30/minute")
@@ -132,7 +210,7 @@ async def get_user_subscriptions_api(
     return {"channels": subscriptions}
 
 @app.get("/api/feed/", response_model=schemas.FeedResponse)
-@cache(expire=120)
+@cache(expire=120, key_builder=feed_key_builder)
 @limiter.limit("30/minute")
 async def get_feed_for_user(
     request: Request,  # ДОБАВИТЬ: нужен для limiter

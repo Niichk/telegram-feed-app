@@ -5,6 +5,7 @@ import boto3
 import io
 import time
 import bleach
+import redis.asyncio as aioredis 
 from dotenv import load_dotenv
 from telethon import TelegramClient, types
 from telethon.errors import ChannelPrivateError, FloodWaitError
@@ -14,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
 from database.engine import session_maker
-from database.models import Channel, Post, BackfillRequest
+from database.models import Channel, Post, BackfillRequest, Subscription
 from telethon.sessions import StringSession
 from datetime import datetime
 from markdown_it import MarkdownIt
@@ -68,6 +69,13 @@ s3_client = boto3.client(
     aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
     region_name=S3_REGION
 )
+
+REDIS_URL = os.getenv("REDIS_URL") 
+if not REDIS_URL:
+    logging.warning("REDIS_URL не установлен. Push-уведомления для API будут отключены.")
+    redis_publisher = None
+else:
+    redis_publisher = aioredis.from_url(REDIS_URL)
 
 # Настраиваем markdown-it с плагином для надежного поиска ссылок
 linkify = LinkifyIt()
@@ -151,6 +159,20 @@ async def save_single_post(db_session: AsyncSession, post: Post, channel_title: 
         await db_session.execute(stmt)
         await db_session.commit()
         logging.info(f"Сохранен пост {post.message_id} из канала «{channel_title}»")
+        if redis_publisher:
+                # Получаем ID всех пользователей, подписанных на этот канал
+                user_ids_query = select(Subscription.user_id).where(Subscription.channel_id == post.channel_id)
+                user_ids_result = await db_session.execute(user_ids_query)
+                user_ids = user_ids_result.scalars().all()
+
+                # Для каждого подписчика отправляем ID нового поста
+                for user_id in user_ids:
+                    # Канал для уведомлений будет user_feed:ID_ПОЛЬЗОВАТЕЛЯ
+                    channel_name = f"user_feed:{user_id}"
+                    # Отправляем ID поста
+                    await redis_publisher.publish(channel_name, str(post.id)) 
+            # --- КОНЕЦ ИЗМЕНЕНИЙ ---
+
         return True
     except Exception as e:
         logging.error(f"Ошибка сохранения поста {post.message_id}: {e}")

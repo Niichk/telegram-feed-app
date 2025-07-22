@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, Component } from 'react'; 
+import React, { useState, useEffect, useCallback, useRef, Component } from 'react';
 
 // --- Вспомогательные компоненты --- (без изменений)
 class ErrorBoundary extends Component {
@@ -281,129 +281,147 @@ function App() {
     const [isFetching, setIsFetching] = useState(false);
     const [initialLoading, setInitialLoading] = useState(true);
     const [isBackfilling, setIsBackfilling] = useState(false);
-    const [hasSubscriptions, setHasSubscriptions] = useState(false);
-    const [isLoadingNewChannel, setIsLoadingNewChannel] = useState(false);
     
     const page = useRef(1);
     const loader = useRef(null);
     const isFetchingRef = useRef(false);
-    const pullStartY = useRef(0);
-    const pullDeltaY = useRef(0);
-    const isPulling = useRef(false);
-    
-    // Оптимизированная функция удаления дубликатов
-    const removeDuplicates = useCallback((existingPosts, newPosts) => {
-        const existingIds = new Set(existingPosts.map(p => `${p.channel.id}-${p.message_id}`));
-        const uniqueNewPosts = newPosts.filter(p => !existingIds.has(`${p.channel.id}-${p.message_id}`));
-        return [...existingPosts, ...uniqueNewPosts];
-    }, []);
 
-    // ИСПРАВЛЕНИЕ: fetchPosts определяется ПЕРВЫМ
+    // --- ЗАГРУЗКА ИСТОРИИ (старые посты) ---
     const fetchPosts = useCallback(async (isRefresh = false) => {
-        if (isFetchingRef.current) return;
-        if (!hasMore && !isRefresh) return;
+        if (isFetchingRef.current || (!hasMore && !isRefresh)) return;
         
-        const controller = new AbortController();
+        isFetchingRef.current = true;
+        setIsFetching(true);
         
-        try {
-            isFetchingRef.current = true;
-            setIsFetching(true);
-            
-            if (isRefresh) {
-                page.current = 1;
-                setPosts([]);
-                setError(null);
-                setHasMore(true);
-                setIsBackfilling(false);
-            }
+        if (isRefresh) {
+            page.current = 1;
+            setPosts([]); // Очищаем посты при ручном обновлении
+            setError(null);
+            setHasMore(true);
+            setIsBackfilling(false);
+        }
 
+        try {
             const response = await fetch(
-                `https://telegram-feed-app-production.up.railway.app/api/feed/?page=${page.current}`, 
-                {
-                    headers: { 'Authorization': `tma ${window.Telegram.WebApp.initData}` },
-                    signal: controller.signal
-                }
+                `https://telegram-feed-app-production.up.railway.app/api/feed/?page=${page.current}`,
+                { headers: { 'Authorization': `tma ${window.Telegram.WebApp.initData}` } }
             );
 
             if (!response.ok) {
-                const errorData = await response.json().catch(() => ({ 
-                    detail: `HTTP ошибка: ${response.status}` 
-                }));
+                const errorData = await response.json().catch(() => ({ detail: `HTTP ошибка: ${response.status}` }));
                 throw new Error(errorData.detail);
             }
 
             const { posts: newPosts, status } = await response.json();
+            
+            setPosts(prev => {
+                const existingIds = new Set(prev.map(p => `${p.channel.id}-${p.message_id}`));
+                const uniqueNewPosts = newPosts.filter(p => !existingIds.has(`${p.channel.id}-${p.message_id}`));
+                return isRefresh ? uniqueNewPosts : [...prev, ...uniqueNewPosts];
+            });
 
-            setPosts(prev => isRefresh ? newPosts : removeDuplicates(prev, newPosts));
             page.current += 1;
             
             if (status === "backfilling") {
                 setIsBackfilling(true);
-                setHasMore(false);
+                setHasMore(false); // Мы достигли конца истории, теперь ждем дозагрузки
             } else {
                 setHasMore(newPosts.length > 0);
             }
-            
         } catch (err) {
-            if (err.name !== 'AbortError') {
-                console.error('Fetch error:', err);
-                setError(err.message);
-                setHasMore(false);
-            }
+            console.error('Fetch history error:', err);
+            setError(err.message);
+            setHasMore(false);
         } finally {
             isFetchingRef.current = false;
             setIsFetching(false);
-            setInitialLoading(false);
+            if (isRefresh || initialLoading) setInitialLoading(false);
         }
+    }, [hasMore, initialLoading]);
+
+    // --- ЭФФЕКТЫ ---
+
+    // 1. Инициализация и загрузка первой страницы истории
+    useEffect(() => {
+        const tg = window.Telegram.WebApp;
+        const applyTheme = () => document.body.className = tg.colorScheme;
+
+        if (tg) {
+            tg.ready();
+            applyTheme();
+            tg.onEvent('themeChanged', applyTheme);
+            
+            if (tg.initData) {
+                fetchPosts(); // Загружаем первую порцию старых постов
+            } else {
+                setError("Не удалось определить пользователя Telegram. Откройте приложение через бота.");
+                setInitialLoading(false);
+            }
+
+            return () => tg.offEvent('themeChanged', applyTheme);
+        } else {
+             setError("Не удалось загрузить Telegram Web App API.");
+             setInitialLoading(false);
+        }
+    }, [fetchPosts]); // fetchPosts добавлен в зависимости
+
+    // 2. ПОДКЛЮЧЕНИЕ К SSE ДЛЯ РЕАЛЬНОГО ВРЕМЕНИ
+    useEffect(() => {
+        const initData = window.Telegram?.WebApp?.initData;
+        if (!initData || initialLoading) { // Не запускаем SSE, пока не загрузится первая страница
+            return;
+        }
+
+        console.log("Connecting to SSE...");
+        const eventSource = new EventSource(`https://telegram-feed-app-production.up.railway.app/api/feed/stream/?authorization=tma ${initData}`);
         
-        return () => controller.abort();
-    }, [hasMore, removeDuplicates]);
-
-    const checkSubscriptions = useCallback(async () => {
-        try {
-            const response = await fetch(
-                `https://telegram-feed-app-production.up.railway.app/api/subscriptions/`, 
-                {
-                    headers: { 'Authorization': `tma ${window.Telegram.WebApp.initData}` }
-                }
-            );
-            if (response.ok) {
-                const data = await response.json();
-                if (data.channels && data.channels.length > 0) {
-                    setHasSubscriptions(true);
-                }
-            }
-        } catch (err) {
-            console.error("Failed to check subscriptions:", err);
-        }
-    }, []);
-
-    const updateSubscriptionStatus = useCallback(async () => {
-        try {
-            const response = await fetch(
-                `https://telegram-feed-app-production.up.railway.app/api/subscriptions/`, 
-                {
-                    headers: { 'Authorization': `tma ${window.Telegram.WebApp.initData}` }
-                }
-            );
-            if (response.ok) {
-                const data = await response.json();
-                const hasChannels = data.channels && data.channels.length > 0;
-                const hadSubscriptionsBefore = hasSubscriptions;
-                setHasSubscriptions(hasChannels);
+        eventSource.onmessage = (event) => {
+            try {
+                const newPost = JSON.parse(event.data);
+                console.log("New post via SSE:", newPost);
                 
-                if (hasChannels && posts.length === 0 && !isFetching) {
-                    fetchPosts(true);
-                    
-                    if (!hadSubscriptionsBefore) {
-                        setIsLoadingNewChannel(true);
+                setPosts(prevPosts => {
+                    // Проверка на дубликат
+                    const isDuplicate = prevPosts.some(p => p.id === newPost.id);
+                    if (!isDuplicate) {
+                        window.Telegram?.WebApp?.HapticFeedback?.notificationOccurred('success');
+                        return [newPost, ...prevPosts];
                     }
-                }
+                    return prevPosts;
+                });
+            } catch (e) {
+                console.error("Failed to parse SSE data:", e);
             }
-        } catch (err) {
-            console.error("Failed to update subscription status:", err);
-        }
-    }, [posts.length, isFetching, hasSubscriptions, fetchPosts]);
+        };
+
+        eventSource.onerror = (err) => {
+            console.error("EventSource failed:", err);
+            eventSource.close();
+        };
+
+        // Закрываем соединение при размонтировании компонента
+        return () => {
+            console.log("Closing SSE connection.");
+            eventSource.close();
+        };
+    }, [initialLoading]); // Переподключаемся, когда initialLoading становится false
+
+
+    // 3. Infinite scroll для подгрузки истории
+    useEffect(() => {
+        const observer = new IntersectionObserver(
+            (entries) => {
+                if (entries[0].isIntersecting && hasMore && !isFetching) {
+                    fetchPosts();
+                }
+            }, { rootMargin: '200px' }
+        );
+
+        const currentLoader = loader.current;
+        if (currentLoader) observer.observe(currentLoader);
+
+        return () => { if (currentLoader) observer.unobserve(currentLoader); };
+    }, [hasMore, isFetching, fetchPosts]);
 
     const handleRefresh = useCallback(() => {
         if (window.Telegram?.WebApp?.HapticFeedback) {
@@ -412,205 +430,7 @@ function App() {
         fetchPosts(true);
     }, [fetchPosts]);
 
-    const scrollToTop = () => {
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-    };
-
-    // ИСПРАВЛЕНИЕ: ЕДИНСТВЕННЫЙ useEffect для инициализации
-    useEffect(() => {
-        const tg = window.Telegram.WebApp;
-
-        const applyThemeClass = () => {
-            document.body.className = tg.colorScheme;
-        };
-
-        const init = async () => {
-            if (tg && tg.initData) {
-                try {
-                    await checkSubscriptions();
-                    await fetchPosts();
-                } catch (error) {
-                    console.error('Initialization error:', error);
-                    setError("Ошибка инициализации приложения");
-                    setInitialLoading(false);
-                }
-            } else {
-                setError("Не удалось определить пользователя Telegram. Откройте приложение через бота.");
-                setInitialLoading(false);
-            }
-        };
-        
-        if (tg) {
-            tg.ready();
-            applyThemeClass();
-            tg.onEvent('themeChanged', applyThemeClass);
-            init();
-        } else {
-            setError("Не удалось загрузить Telegram Web App API.");
-            setInitialLoading(false);
-        }
-        
-        return () => {
-            isFetchingRef.current = false;
-            if (tg) {
-                tg.offEvent('themeChanged', applyThemeClass);
-            }
-        };
-    }, []); // ← ПУСТЫЕ зависимости!
-
-    useEffect(() => {
-        const handleClick = (event) => {
-            // Ищем тег <tg-spoiler> при клике
-            const spoiler = event.target.closest('tg-spoiler');
-            if (spoiler) {
-                spoiler.classList.toggle('revealed');
-            }
-        };
-
-        // Добавляем один обработчик на весь документ
-        document.addEventListener('click', handleClick);
-
-        // Убираем обработчик при размонтировании компонента
-        return () => {
-            document.removeEventListener('click', handleClick);
-        };
-    }, []);
-
-    // useEffect для реалтайм обновлений
-    useEffect(() => {
-        if (!isLoadingNewChannel) return;
-        
-        const checkInterval = setInterval(async () => {
-            try {
-                const response = await fetch(
-                    `https://telegram-feed-app-production.up.railway.app/api/feed/?page=1`, 
-                    {
-                        headers: { 'Authorization': `tma ${window.Telegram.WebApp.initData}` }
-                    }
-                );
-                
-                if (response.ok) {
-                    const { posts: freshPosts } = await response.json();
-                    
-                    setPosts(current => {
-                        const newUniquePosts = freshPosts.filter(newPost => 
-                            !current.some(existingPost => 
-                                existingPost.channel.id === newPost.channel.id && 
-                                existingPost.message_id === newPost.message_id
-                            )
-                        );
-                        
-                        if (newUniquePosts.length > 0) {
-                            setIsLoadingNewChannel(false);
-                            return [...newUniquePosts, ...current];
-                        }
-                        return current;
-                    });
-                }
-            } catch (err) {
-                console.error('Realtime update error:', err);
-            }
-        }, 3000);
-        
-        const timeout = setTimeout(() => {
-            clearInterval(checkInterval);
-            setIsLoadingNewChannel(false);
-        }, 120000);
-        
-        return () => {
-            clearInterval(checkInterval);
-            clearTimeout(timeout);
-        };
-    }, [isLoadingNewChannel]);
-
-    // Периодическая проверка подписок
-    useEffect(() => {
-        const interval = setInterval(() => {
-            if (posts.length === 0 && !isFetching && !initialLoading) {
-                updateSubscriptionStatus();
-            }
-        }, 30000);
-
-        return () => clearInterval(interval);
-    }, [posts.length, isFetching, initialLoading, updateSubscriptionStatus]);
-
-    // Pull to refresh
-    useEffect(() => {
-        const indicator = document.getElementById('refresh-indicator');
-        if (!indicator) return;
-        
-        let animationFrame = null;
-        
-        const PULL_THRESHOLD = 70;
-        const PULL_RESISTANCE = 2;
-        
-        const updateIndicatorPosition = (delta) => {
-            if (animationFrame) cancelAnimationFrame(animationFrame);
-            
-            animationFrame = requestAnimationFrame(() => {
-                const position = Math.min(delta / PULL_RESISTANCE - 50, 70);
-                indicator.style.transform = `translateY(${position}px)`;
-            });
-        };
-        
-        const handleTouchStart = (e) => { 
-            if (window.scrollY === 0) { 
-                pullStartY.current = e.touches[0].clientY; 
-                isPulling.current = true; 
-            }
-        };
-        
-        const handleTouchMove = (e) => { 
-            if (!isPulling.current) return; 
-            const delta = e.touches[0].clientY - pullStartY.current; 
-            if (delta > 0) { 
-                pullDeltaY.current = delta;
-                updateIndicatorPosition(delta);
-            }
-        };
-        
-        const handleTouchEnd = () => { 
-            if (!isPulling.current) return; 
-            
-            if (pullDeltaY.current > PULL_THRESHOLD) { 
-                indicator.style.transform = 'translateY(20px)'; 
-                handleRefresh(); 
-                setTimeout(() => { 
-                    indicator.style.transform = 'translateY(-50px)'; 
-                }, 1000); 
-            } else { 
-                indicator.style.transform = 'translateY(-50px)'; 
-            } 
-            
-            isPulling.current = false; 
-            pullDeltaY.current = 0; 
-        };
-        
-        window.addEventListener('touchstart', handleTouchStart);
-        window.addEventListener('touchmove', handleTouchMove);
-        window.addEventListener('touchend', handleTouchEnd);
-        
-        return () => { 
-            if (animationFrame) cancelAnimationFrame(animationFrame);
-            window.removeEventListener('touchstart', handleTouchStart);
-            window.removeEventListener('touchmove', handleTouchMove);
-            window.removeEventListener('touchend', handleTouchEnd);
-        };
-    }, [handleRefresh]);
-    
-    // Infinite scroll
-    useEffect(() => {
-        const handleObserver = (entities) => { 
-            const target = entities[0]; 
-            if (target.isIntersecting && hasMore && !isFetching) { 
-                fetchPosts();
-            } 
-        };
-        const observer = new IntersectionObserver(handleObserver, { rootMargin: '200px' });
-        const currentLoader = loader.current;
-        if (currentLoader) { observer.observe(currentLoader); }
-        return () => { if (currentLoader) { observer.unobserve(currentLoader); } };
-    }, [posts, hasMore, isFetching, fetchPosts]);
+    const scrollToTop = () => window.scrollTo({ top: 0, behavior: 'smooth' });
 
     if (initialLoading) {
         return (
