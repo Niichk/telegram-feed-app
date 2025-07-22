@@ -20,6 +20,7 @@ from database.models import Post
 from database.schemas import PostInFeed
 from worker import backfill_user_channels
 
+from fastapi import Request
 from fastapi_cache import FastAPICache
 from fastapi_cache.backends.redis import RedisBackend
 from fastapi.responses import StreamingResponse
@@ -37,6 +38,7 @@ limiter = Limiter(key_func=get_remote_address)
 BOT_TOKEN = os.getenv("API_TOKEN")
 REDIS_URL = os.getenv("REDIS_URL")
 FRONTEND_URL = os.getenv("FRONTEND_URL")
+IS_DEVELOPMENT = os.getenv("ENVIRONMENT") == "development"
 
 app = FastAPI(title="Feed Reader API")
 app.state.limiter = limiter
@@ -55,28 +57,27 @@ async def on_startup():
         FastAPICache.init(RedisBackend(redis_client), prefix="fastapi-cache")
         print("FastAPI-Cache with Redis backend is initialized.")
 
-origins = []
+allowed_origins = []
 if FRONTEND_URL:
-    origins.append(FRONTEND_URL)
-else:
-    origins = [
-    "https://telegram-feed-app-production.up.railway.app",
-    "https://*.railway.app",
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost",
-    "http://127.0.0.1",
-]
+    allowed_origins.append(FRONTEND_URL)
+
+if IS_DEVELOPMENT:
+    allowed_origins.extend([
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "https://web.telegram.org",
+    ])
 
 redis_subscriber = aioredis.from_url(REDIS_URL, decode_responses=True) if REDIS_URL else None
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # ВРЕМЕННО: разрешаем все источники для отладки
-    allow_credentials=False,  # ИСПРАВЛЕНИЕ: убираем credentials для "*" origins
-    allow_methods=["GET", "POST", "OPTIONS"],  # ИСПРАВЛЕНИЕ: явно разрешаем OPTIONS
-    allow_headers=["*"],  # ИСПРАВЛЕНИЕ: разрешаем все заголовки
+    allow_origins=allowed_origins,
+    allow_credentials=True,  # Важно для передачи авторизационных заголовков
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
+
 
 async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
     async with session_maker() as session:
@@ -128,6 +129,29 @@ def feed_key_builder(
 
     # Создаем ключ из префикса, пути, ID пользователя и параметров запроса (например, номера страницы)
     return f"{namespace}:{request.url.path}:{user_id}:{request.query_params}"
+
+def get_user_id_for_rate_limit(request: Request) -> str:
+    """
+    Извлекает ID пользователя из заголовка Authorization для rate limiting.
+    Если не удается, возвращает IP-адрес как запасной вариант.
+    """
+    auth_header = request.headers.get("authorization")
+    
+    if auth_header and auth_header.startswith("tma "):
+        init_data = auth_header.split(" ", 1)[1]
+        validated_data = is_valid_tma_data(init_data)
+        if validated_data:
+            try:
+                user_info = json.loads(validated_data['user'])
+                return str(user_info['id'])
+            except (KeyError, json.JSONDecodeError):
+                # Если данные пользователя некорректны, используем IP
+                pass
+                
+    # Запасной вариант для всех остальных случаев
+    return get_remote_address(request)
+
+limiter = Limiter(key_func=get_user_id_for_rate_limit)
 
 @app.get("/api/feed/stream/") # Убрали user_id из URL, получим его из авторизации
 async def stream_user_posts(

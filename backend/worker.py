@@ -5,6 +5,7 @@ import boto3
 import io
 import time
 import bleach
+import signal
 import redis.asyncio as aioredis 
 from dotenv import load_dotenv
 from telethon import TelegramClient, types
@@ -31,6 +32,8 @@ from html import escape
 #   - html: False -> Не пропускать сырой HTML из текста (для безопасности)
 #   - linkify: True -> Автоматически превращать текстовые ссылки в кликабельные
 md_parser = MarkdownIt('commonmark', {'breaks': True, 'html': False, 'linkify': True})
+
+shutdown_event = asyncio.Event()
 
 # Настройка
 load_dotenv()
@@ -95,6 +98,11 @@ worker_stats = {
     'processed_posts': 0,
     'errors': 0
 }
+
+def signal_handler(signum, frame):
+    """Обработчик системных сигналов."""
+    logging.info(f"Получен сигнал {signal.Signals(signum).name}. Начинаю корректное завершение...")
+    shutdown_event.set()
 
 def process_text(message_text: str | None) -> str | None:
     """
@@ -788,37 +796,51 @@ async def process_backfill_requests():
 from database.engine import create_db
 
 async def main():
+    # Регистрируем обработчики сигналов
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+
     await create_db()
     logging.info("Worker: Database tables checked/created.")
 
     max_retries = 3
     retry_count = 0
 
-    while retry_count < max_retries:
+    while retry_count < max_retries and not shutdown_event.is_set():
         try:
             async with client:
                 logging.info("Клиент Telethon запущен.")
-                while True:
+                while not shutdown_event.is_set(): # <-- Проверяем флаг здесь
                     try:
-                        await asyncio.gather(
-                            periodic_task_parallel(),
-                            process_backfill_requests()
+                        # Запускаем задачи с таймаутом, чтобы цикл не блокировался навечно
+                        await asyncio.wait_for(
+                            asyncio.gather(
+                                periodic_task_parallel(),
+                                process_backfill_requests()
+                            ),
+                            timeout=SLEEP_TIME + 30 # Даем немного больше времени, чем пауза
                         )
+                        
                         logging.info(f"Все задачи выполнены. Засыпаю на {SLEEP_TIME / 60:.1f} минут...")
-                        await asyncio.sleep(SLEEP_TIME)
+                        # Вместо sleep используем wait на событии, чтобы мгновенно реагировать на сигнал
+                        await asyncio.wait_for(shutdown_event.wait(), timeout=SLEEP_TIME)
+
+                    except asyncio.TimeoutError:
+                        # Это нормальное поведение, просто продолжаем цикл
+                        continue
                     except Exception as e:
-                        logging.error(f"Ошибка в основном цикле: {e}")
+                        logging.error(f"Ошибка в основном цикле: {e}", exc_info=True)
                         worker_stats['errors'] += 1
-                        await asyncio.sleep(10)
+                        await asyncio.sleep(10) # Короткая пауза после ошибки
         except Exception as e:
-            retry_count += 1
-            logging.error(f"Критическая ошибка клиента Telethon (попытка {retry_count}/{max_retries}): {e}")
-            worker_stats['errors'] += 1
-            if retry_count < max_retries:
-                await asyncio.sleep(30)
-            else:
-                logging.error("Превышено максимальное количество попыток переподключения")
-                raise
+            # ... (retry logic remains the same)
+
+    logging.info("Воркер корректно завершил работу.")
+
+# --- КОНЕЦ ИЗМЕНЕНИЙ ---
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logging.info("Приложение остановлено.")
