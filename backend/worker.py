@@ -796,7 +796,7 @@ async def process_backfill_requests():
 from database.engine import create_db
 
 async def main():
-    # Регистрируем обработчики сигналов
+    # Регистрируем обработчики сигналов в самом начале
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
 
@@ -806,39 +806,57 @@ async def main():
     max_retries = 3
     retry_count = 0
 
+    # Главный цикл, который проверяет и на количество попыток, и на сигнал завершения
     while retry_count < max_retries and not shutdown_event.is_set():
         try:
+            # Контекстный менеджер для клиента Telethon
             async with client:
-                logging.info("Клиент Telethon запущен.")
-                while not shutdown_event.is_set(): # <-- Проверяем флаг здесь
+                logging.info("Клиент Telethon успешно запущен.")
+                # Сбрасываем счетчик попыток при успешном подключении
+                retry_count = 0 
+                
+                # Внутренний цикл работы, который прерывается сигналом shutdown
+                while not shutdown_event.is_set():
                     try:
-                        # Запускаем задачи с таймаутом, чтобы цикл не блокировался навечно
-                        await asyncio.wait_for(
-                            asyncio.gather(
-                                periodic_task_parallel(),
-                                process_backfill_requests()
-                            ),
-                            timeout=SLEEP_TIME + 30 # Даем немного больше времени, чем пауза
+                        # Запускаем наши основные задачи
+                        await asyncio.gather(
+                            periodic_task_parallel(),
+                            process_backfill_requests()
                         )
                         
                         logging.info(f"Все задачи выполнены. Засыпаю на {SLEEP_TIME / 60:.1f} минут...")
-                        # Вместо sleep используем wait на событии, чтобы мгновенно реагировать на сигнал
+                        # Используем wait на событии вместо sleep.
+                        # Это позволяет мгновенно прервать "сон" при получении сигнала.
                         await asyncio.wait_for(shutdown_event.wait(), timeout=SLEEP_TIME)
 
+                    # TimeoutError - это не ошибка, а ожидаемое поведение, когда сон завершается
                     except asyncio.TimeoutError:
-                        # Это нормальное поведение, просто продолжаем цикл
                         continue
+                    # Отлавливаем другие ошибки во внутреннем цикле, чтобы не "уронить" всю программу
                     except Exception as e:
-                        logging.error(f"Ошибка в основном цикле: {e}", exc_info=True)
+                        logging.error(f"Ошибка в основном рабочем цикле: {e}", exc_info=True)
                         worker_stats['errors'] += 1
-                        await asyncio.sleep(10) # Короткая пауза после ошибки
+                        await asyncio.sleep(10) # Короткая пауза перед следующей итерацией
+
+        # ЭТОТ БЛОК ТЕПЕРЬ ИСПРАВЛЕН
         except Exception as e:
-            # ... (retry logic remains the same)
+            # Этот блок отлавливает ошибки, связанные с самим клиентом Telethon (например, не удалось подключиться)
+            retry_count += 1
+            logging.error(f"Критическая ошибка клиента Telethon (попытка {retry_count}/{max_retries}): {e}")
+            worker_stats['errors'] += 1
+            if retry_count < max_retries:
+                logging.info(f"Повторная попытка подключения через 30 секунд...")
+                await asyncio.sleep(30)
+            else:
+                logging.error("Превышено максимальное количество попыток переподключения. Воркер останавливается.")
+                # Принудительно взводим событие, чтобы завершить цикл
+                shutdown_event.set()
 
     logging.info("Воркер корректно завершил работу.")
 
-# --- КОНЕЦ ИЗМЕНЕНИЙ ---
+# --- КОНЕЦ ИСПРАВЛЕННОЙ ФУНКЦИИ ---
 
+# Запускающий блок остается без изменений
 if __name__ == "__main__":
     try:
         asyncio.run(main())
