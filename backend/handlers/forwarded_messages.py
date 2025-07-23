@@ -6,6 +6,7 @@ from database.models import Channel
 import logging
 import asyncio
 from collections import defaultdict
+from .user_commands import get_main_keyboard
 
 router = Router()
 
@@ -82,7 +83,10 @@ async def handle_forwarded_message(message: types.Message, session: AsyncSession
         fresh_channel = await session.get(Channel, new_channel_obj.id)
         channel_title = fresh_channel.title if fresh_channel else "канал"
         
-        await message.answer(f"👍 Готово! Последние посты из «{channel_title}» добавлены в вашу ленту.")
+        await message.answer(
+            f"👍 Готово! Последние посты из «{channel_title}» добавлены в вашу ленту.",
+            reply_markup=get_main_keyboard() # <-- И сюда тоже
+        )
         
     except ValueError as e:
         logging.error(f"Не удалось получить доступ к каналу {new_channel_obj.id}: {e}")
@@ -93,4 +97,6 @@ async def handle_forwarded_message(message: types.Message, session: AsyncSession
         )
     except Exception as e:
         logging.error(f"Критическая ошибка при обработке нового канала {new_channel_obj.id}: {e}")
-        await message.answer("Произошла внутренняя ошибка. Попробуйте позже.")
+        await message.answer("Произошла внутренняя ошибка. Попробуйте позже.",
+            reply_markup=get_main_keyboard() # <-- И сюда тоже
+        )
