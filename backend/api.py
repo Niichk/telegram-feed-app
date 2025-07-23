@@ -4,6 +4,7 @@ import os
 import json
 import logging
 import asyncio
+import time
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Header, Depends, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,6 +30,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
+
 load_dotenv()
 
 # --- КОНФИГУРАЦИЯ ---
@@ -42,10 +44,10 @@ IS_DEVELOPMENT = os.getenv("ENVIRONMENT") == "development"
 app = FastAPI(title="Feed Reader API")
 
 # --- ОБРАБОТЧИКИ ОШИБОК ---
-def rate_limit_exceeded_handler(request: Request, exc: Exception):
+def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
     return _rate_limit_exceeded_handler(request, exc) # type: ignore
 
-app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler) # type: ignore
 
 # --- MIDDLEWARE (CORS) ---
 allowed_origins = []
@@ -146,11 +148,27 @@ async def on_startup():
 
 
 # --- КЛЮЧ КЭШИРОВАНИЯ ---
-def feed_key_builder(func, namespace: str = "", *, request: Optional[Request] = None, response: Optional[Response] = None, args=(), kwargs=None):
-    if request is None:
-        return f"{namespace}:no-request"
-    user_id = get_user_id_from_request(request)
-    page = request.query_params.get("page", "1")
+def feed_key_builder(
+    func,
+    namespace: str = "",
+    *,
+    request: Optional[Request] = None,
+    response: Optional[Response] = None,
+    args=(),
+    kwargs={},
+):
+    """
+    Создает ключ кеша, используя УЖЕ ВАЛИДИРОВАННЫЙ user_id из аргументов функции.
+    Это защищает от проблемы с кешированием initData на стороне клиента.
+    """
+    # Извлекаем user_id и page из аргументов, переданных в get_feed_for_user
+    user_id = kwargs.get("user_id")
+    page = kwargs.get("page", 1)
+    
+    # Если по какой-то причине user_id не был передан, создаем уникальный ключ, чтобы избежать коллизий
+    if request is None or user_id is None:
+        return f"{namespace}:{getattr(request, 'url', None)}?{getattr(request, 'query_params', None)}:{time.time()}"
+
     return f"{namespace}:{request.url.path}:{user_id}:page={page}"
 
 
