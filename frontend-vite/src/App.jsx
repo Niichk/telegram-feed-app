@@ -373,7 +373,7 @@ function App() {
         }
 
         console.log("Connecting to SSE...");
-        const eventSource = new EventSource(`https://telegram-feed-app-production.up.railway.app/api/feed/stream/?authorization=tma ${initData}`);
+        const eventSource = new EventSource(`https://telegram-feed-app-production.up.railway.app/api/feed/stream/?authorization=tma ${encodeURIComponent(initData)}`);
         
         eventSource.onmessage = (event) => {
             try {
