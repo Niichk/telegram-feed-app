@@ -11,7 +11,8 @@ def get_main_keyboard():
     builder = ReplyKeyboardBuilder()
     builder.button(text="📜 Мои подписки")
     builder.button(text="ℹ️ Помощь")
-    builder.adjust(1)
+    builder.button(text="✍️ Оставить отзыв")
+    builder.adjust(1) # Каждая кнопка на новой строке
     return builder.as_markup(resize_keyboard=True, input_field_placeholder="Выберите действие...")
 
 @router.message(Command("start"))

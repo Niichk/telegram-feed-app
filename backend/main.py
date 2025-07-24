@@ -8,7 +8,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.types import BotCommand
 
 from database.engine import session_maker, create_db
-from handlers import user_commands, forwarded_messages, callback_handlers
+from handlers import user_commands, forwarded_messages, callback_handlers, feedback_handler 
 from middlewares.db import DbSessionMiddleware
 
 
@@ -37,7 +37,9 @@ async def main():
 
     main_menu_commands = [
         BotCommand(command="/start", description="▶️ Запустить бота"),
-        BotCommand(command="/subscriptions", description="📜 Мои подписки")
+        BotCommand(command="/subscriptions", description="📜 Мои подписки"),
+        BotCommand(command="/help", description="ℹ️ Помощь"),
+        BotCommand(command="/feedback", description="✍️ Оставить отзыв")
     ]
     await bot.set_my_commands(main_menu_commands)
 
@@ -48,6 +50,7 @@ async def main():
     dp.include_router(user_commands.router)
     dp.include_router(forwarded_messages.router)
     dp.include_router(callback_handlers.router)
+    dp.include_router(feedback_handler.router)
 
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
