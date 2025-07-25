@@ -224,119 +224,80 @@ async def log_worker_stats():
         f"Ошибок: {worker_stats['errors']}"
     )
 
-async def upload_media_to_s3(message: types.Message, channel_id: int) -> dict | None:
+async def upload_media_to_s3(message: types.Message, channel_id: int) -> tuple[int, dict | None]:
     """Загружает медиафайл и его превью (для видео) в S3."""
     media_data = {}
     media_type = None
 
-    # ИСПРАВЛЕНИЕ: Проверка размера файла ПЕРЕД обработкой
     if isinstance(message.media, types.MessageMediaDocument):
         file_size = getattr(message.media.document, 'size', 0)
-        if file_size > 60 * 1024 * 1024:  # 60MB лимит
-            logging.warning(f"Файл слишком большой ({file_size} bytes), пропускаем")
-            return None
+        if file_size > 60 * 1024 * 1024:
+            logging.warning(f"Файл для поста {message.id} слишком большой, пропускаем")
+            return message.id, None
 
-    if isinstance(message.media, types.MessageMediaPhoto):
-        media_type = 'photo'
+    if isinstance(message.media, types.MessageMediaPhoto): media_type = 'photo'
     elif isinstance(message.media, types.MessageMediaDocument):
         mime_type = getattr(message.media.document, 'mime_type', '')
-        if mime_type.startswith('video/'):
-            media_type = 'video'
-        elif mime_type.startswith('audio/'):
-            media_type = 'audio'
-        elif mime_type in ['image/gif', 'video/mp4'] and 'gif' in getattr(message.media.document, 'file_name', '').lower():
-            media_type = 'gif'
+        if mime_type.startswith('video/'): media_type = 'video'
+        elif mime_type.startswith('audio/'): media_type = 'audio'
+        elif mime_type in ['image/gif', 'video/mp4']: media_type = 'gif'
 
-    if not media_type:
-        return None
+    if not media_type: return message.id, None
 
     try:
-        # Проверяем, существует ли уже файл в S3
+        # ... (остальная логика определения file_key, content_type и загрузки)
         if media_type == 'photo':
             file_extension = '.webp'
             content_type = 'image/webp'
-        elif media_type == 'gif':
-            file_extension = '.gif'
-            content_type = 'image/gif'
-        else:
-            doc = message.media.document # type: ignore
-            attributes = getattr(doc, 'attributes', [])
-            file_name = next((attr.file_name for attr in attributes if hasattr(attr, 'file_name')), None)
+        elif media_type in ['video', 'audio', 'gif'] and isinstance(message.media, types.MessageMediaDocument):
+            doc = message.media.document
+            file_name = next((attr.file_name for attr in getattr(doc, 'attributes', []) if hasattr(attr, 'file_name')), None)
             file_extension = os.path.splitext(file_name)[1] if file_name else '.dat'
             content_type = getattr(doc, 'mime_type', 'application/octet-stream')
-
+        else:
+            file_extension = '.dat'
+            content_type = 'application/octet-stream'
         file_key = f"media/{channel_id}/{message.id}{file_extension}"
-        
-        # ИСПРАВЛЕНИЕ: Проверяем существование файла в S3
-        try:
-            s3_client.head_object(Bucket=S3_BUCKET_NAME, Key=file_key)
-            file_exists = True
-        except s3_client.exceptions.NoSuchKey:
-            file_exists = False
-        except Exception:
-            file_exists = False
 
-        if not file_exists:
-            # Загружаем основной медиафайл только если его нет
-            file_in_memory = io.BytesIO()
-            await client.download_media(message, file=file_in_memory)
-            file_in_memory.seek(0)
-
-            if media_type == 'photo':
-                with Image.open(file_in_memory) as im:
-                    im = im.convert("RGB")
-                    output_buffer = io.BytesIO()
-                    im.save(output_buffer, format="WEBP", quality=80)
-                    output_buffer.seek(0)
-                    file_in_memory = output_buffer
-            # GIF остаются как есть
-            
-            s3_client.upload_fileobj(file_in_memory, S3_BUCKET_NAME, file_key, ExtraArgs={'ContentType': content_type})
-            logging.info(f"Загружен медиафайл: {file_key}")
+        # Загружаем основной файл
+        file_in_memory = io.BytesIO()
+        await client.download_media(message, file=file_in_memory)
+        file_in_memory.seek(0)
+        if media_type == 'photo':
+            # Оптимизация изображений в WebP
+            with Image.open(file_in_memory) as im:
+                im = im.convert("RGB")
+                output_buffer = io.BytesIO()
+                im.save(output_buffer, format="WEBP", quality=80)
+                output_buffer.seek(0)
+                file_in_memory = output_buffer
+        s3_client.upload_fileobj(file_in_memory, S3_BUCKET_NAME, file_key, ExtraArgs={'ContentType': content_type})
         
         media_data["type"] = media_type
         media_data["url"] = f"https://{S3_BUCKET_NAME}.s3.{S3_REGION}.amazonaws.com/{file_key}"
 
-        # ИСПРАВЛЕНИЕ: Проверяем существование превью для видео
+        # Загружаем превью для видео
         document = getattr(message.media, 'document', None)
-        if (
-            media_type == 'video'
-            and document and not isinstance(document, DocumentEmpty)
-            and hasattr(document, 'thumbs') and document.thumbs
-        ):
+        if media_type == 'video' and document and not isinstance(document, DocumentEmpty) and hasattr(document, 'thumbs') and document.thumbs:
             thumb_key = f"media/{channel_id}/{message.id}_thumb.webp"
-            
-            # Проверяем существование превью
-            try:
-                s3_client.head_object(Bucket=S3_BUCKET_NAME, Key=thumb_key)
-                thumb_exists = True
-            except s3_client.exceptions.NoSuchKey:
-                thumb_exists = False
-            except Exception:
-                thumb_exists = False
-
-            if not thumb_exists:
-                thumb_in_memory = io.BytesIO()
-                await client.download_media(message, thumb=-1, file=thumb_in_memory)
-                thumb_in_memory.seek(0)
-
-                if thumb_in_memory.getbuffer().nbytes > 0:
-                    with Image.open(thumb_in_memory) as im:
-                        im = im.convert("RGB")
-                        output_buffer = io.BytesIO()
-                        im.save(output_buffer, format="WEBP", quality=75)
-                        output_buffer.seek(0)
-                        
-                        s3_client.upload_fileobj(output_buffer, S3_BUCKET_NAME, thumb_key, ExtraArgs={'ContentType': 'image/webp'})
-                        logging.info(f"Загружено превью для видео: {thumb_key}")
-            
-            media_data["thumbnail_url"] = f"https://{S3_BUCKET_NAME}.s3.{S3_REGION}.amazonaws.com/{thumb_key}"
-
-        return media_data
-    
+            thumb_in_memory = io.BytesIO()
+            await client.download_media(message, thumb=-1, file=thumb_in_memory)
+            thumb_in_memory.seek(0)
+            if thumb_in_memory.getbuffer().nbytes > 0:
+                with Image.open(thumb_in_memory) as im:
+                    im = im.convert("RGB")
+                    output_buffer = io.BytesIO()
+                    im.save(output_buffer, format="WEBP", quality=75)
+                    output_buffer.seek(0)
+                    s3_client.upload_fileobj(output_buffer, S3_BUCKET_NAME, thumb_key, ExtraArgs={'ContentType': 'image/webp'})
+                media_data["thumbnail_url"] = f"https://{S3_BUCKET_NAME}.s3.{S3_REGION}.amazonaws.com/{thumb_key}"
+        
+        return message.id, media_data
     except Exception as e:
-        logging.error(f"Критическая ошибка в upload_media_to_s3: {e}", exc_info=True)
-        return None
+        logging.error(f"Ошибка загрузки медиа для поста {message.id}: {e}", exc_info=True)
+        return message.id, None
+    
+
 
 async def upload_avatar_to_s3(channel_entity) -> str | None:
     """Скачивает аватар канала, загружает в S3 и возвращает URL."""
@@ -437,6 +398,47 @@ async def process_grouped_messages(grouped_messages, channel_id_for_log, db_sess
         forwarded_from=forward_data
     )
     return new_post
+
+async def create_post_object(message: types.Message, channel_id: int) -> Post:
+    """Вспомогательная функция для создания объекта Post из сообщения Telethon."""
+    processed_text = process_text(message.text)
+    reactions_data = []
+    if message.reactions and message.reactions.results:
+        for r in message.reactions.results:
+            if r.count > 0:
+                reaction_item = {"count": r.count}
+                if hasattr(r.reaction, 'emoticon'): reaction_item["emoticon"] = r.reaction.emoticon
+                elif hasattr(r.reaction, 'document_id'): reaction_item["document_id"] = r.reaction.document_id
+                reactions_data.append(reaction_item)
+    
+    forward_data = None
+    if message.fwd_from:
+        # ... (логика обработки forward_data без изменений) ...
+        try:
+            if hasattr(message.fwd_from, 'from_id') and message.fwd_from.from_id:
+                source_entity = await client.get_entity(message.fwd_from.from_id)
+                from_name = getattr(source_entity, 'title', getattr(source_entity, 'first_name', 'Неизвестный источник'))
+                username = getattr(source_entity, 'username', None)
+                raw_channel_id = getattr(source_entity, 'id', None)
+                channel_id_str = str(raw_channel_id)[4:] if raw_channel_id and str(raw_channel_id).startswith('-100') else str(raw_channel_id) if raw_channel_id else None
+                forward_data = {"from_name": from_name, "username": username, "channel_id": channel_id_str}
+            elif hasattr(message.fwd_from, 'from_name') and message.fwd_from.from_name:
+                forward_data = {"from_name": message.fwd_from.from_name, "username": None, "channel_id": None}
+        except Exception as e:
+            logging.warning(f"Не удалось получить entity для репоста: {e}")
+            forward_data = {"from_name": "Недоступный источник", "username": None, "channel_id": None}
+
+    return Post(
+        channel_id=channel_id,
+        message_id=message.id,
+        date=message.date,
+        text=processed_text,
+        grouped_id=message.grouped_id,
+        views=getattr(message, 'views', 0) or 0,
+        reactions=reactions_data,
+        forwarded_from=forward_data,
+        media=[] # Медиа будет добавлено позже
+    )
 
 async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, post_limit: int = 10, offset_id: int = 0, real_time_save: bool = False):
     """
