@@ -360,20 +360,36 @@ async def process_channel_safely(channel: Channel, semaphore: asyncio.Semaphore,
                 await worker_stats.increment_errors()
 
 async def periodic_task_parallel():
+    """Периодическая обработка всех каналов, у которых есть подписчики"""
     logging.info("Начинаю периодический сбор постов...")
+    
     list_of_channels = []
     async with session_maker() as session:
-        result = await session.execute(select(Channel))
+        # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
+        # Выбираем только те каналы, которые есть в таблице подписок.
+        # distinct() гарантирует, что каждый канал будет в списке только один раз.
+        query = (
+            select(Channel)
+            .join(Subscription, Channel.id == Subscription.channel_id)
+            .distinct()
+        )
+        result = await session.execute(query)
         list_of_channels = result.scalars().all()
+        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
     await worker_stats.set_channels(len(list_of_channels))
+
     if not list_of_channels:
         logging.info("В базе нет каналов для отслеживания.")
         return
+        
     semaphore = asyncio.Semaphore(15)
     tasks = [process_channel_safely(channel, semaphore, POST_LIMIT) for channel in list_of_channels]
+    
     if tasks:
         logging.info(f"Запускаю обработку {len(tasks)} каналов параллельно...")
         await asyncio.gather(*tasks)
+    
     logging.info("Все каналы обработаны.")
     await log_worker_stats()
 
