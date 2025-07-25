@@ -448,24 +448,17 @@ function App() {
     }
     
     if (posts.length === 0 && !isFetching && !initialLoading) {
-        if (hasSubscriptions || isLoadingNewChannel) {
-            return (
-                <>
-                    <Header onRefresh={handleRefresh} onScrollUp={scrollToTop} />
-                    <div className="feed-container">
-                        {isLoadingNewChannel && (
-                            <div className="status-message">
-                                Загружаем посты из нового канала... 📥
-                            </div>
-                        )}
-                        {[...Array(3)].map((_, i) => <SkeletonCard key={i} />)}
-                    </div>
-                </>
-            );
-        } else {
-            return <div className="status-message">Ваша лента пока пуста. Добавьте каналы через бота!</div>;
-        }
-    }
+    // Просто возвращаем сообщение для нового пользователя.
+    // Статус "backfilling" от API покроет случай, когда посты догружаются.
+    return (
+        <>
+            <Header onRefresh={handleRefresh} onScrollUp={scrollToTop} />
+            <div className="status-message">
+                Ваша лента пока пуста. Добавьте каналы через бота!  лен. 
+            </div>
+        </>
+    );
+}
 
     return (
         <>
