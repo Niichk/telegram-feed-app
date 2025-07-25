@@ -444,21 +444,36 @@ function App() {
     }
 
     if (error) {
+        return (
+            <>
+                <Header onRefresh={handleRefresh} onScrollUp={scrollToTop} />
+                <div className="status-message">Ошибка: {error}</div>
+            </>
+        );
+    }
+
+    if (error) {
         return <div className="status-message">Ошибка: {error}</div>;
     }
     
-    if (posts.length === 0 && !isFetching && !initialLoading) {
-    // Просто возвращаем сообщение для нового пользователя.
-    // Статус "backfilling" от API покроет случай, когда посты догружаются.
-    return (
-        <>
-            <Header onRefresh={handleRefresh} onScrollUp={scrollToTop} />
-            <div className="status-message">
-                Ваша лента пока пуста. Добавьте каналы через бота!  лен. 
-            </div>
-        </>
-    );
-}
+    if (posts.length === 0 && !initialLoading) {
+        return (
+            <>
+                <Header onRefresh={handleRefresh} onScrollUp={scrollToTop} />
+                <div className="status-message">
+                    {isFetching ? (
+                        <>
+                            <RadialLoader />
+                            <br />
+                            Загружаем вашу ленту...
+                        </>
+                    ) : (
+                        "Ваша лента пока пуста. Добавьте каналы через бота! 📱"
+                    )}
+                </div>
+            </>
+        );
+    }
 
     return (
         <>
