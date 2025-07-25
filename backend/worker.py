@@ -6,7 +6,7 @@ import io
 import time
 import bleach
 import signal
-import redis.asyncio as aioredis 
+import redis.asyncio as aioredis
 from dotenv import load_dotenv
 from telethon import TelegramClient, types
 from telethon.errors import ChannelPrivateError, FloodWaitError
@@ -14,8 +14,9 @@ from telethon.tl.types import InputPeerChannel, DocumentEmpty
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.dialects.postgresql import insert
 
-from database.engine import session_maker
+from database.engine import session_maker, create_db
 from database.models import Channel, Post, BackfillRequest, Subscription
 from telethon.sessions import StringSession
 from datetime import datetime
@@ -24,25 +25,17 @@ from linkify_it import LinkifyIt
 from PIL import Image
 from html import escape
 
-# --- НАСТРОЙКА КОНВЕРТЕРА MARKDOWN -> HTML (ВСТАВИТЬ ПОСЛЕ ИМПОРТОВ) ---
-# Создаем экземпляр конвертера с настройками, которые нам нужны.
-# commonmark - стандартный markdown
-# {'breaks': True, 'html': False, 'linkify': True} - настройки:
-#   - breaks: True -> Превращать переносы строк в <br>
-#   - html: False -> Не пропускать сырой HTML из текста (для безопасности)
-#   - linkify: True -> Автоматически превращать текстовые ссылки в кликабельные
+# --- НАСТРОЙКА КОНВЕРТЕРА MARKDOWN -> HTML ---
 md_parser = MarkdownIt('commonmark', {'breaks': True, 'html': False, 'linkify': True})
 
 shutdown_event = asyncio.Event()
 
-# Настройка
+# --- Настройка логирования и переменных окружения ---
 load_dotenv()
 DB_URL_FOR_LOG = os.getenv("DATABASE_URL")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logging.info(f"!!! WORKER STARTING WITH DATABASE_URL: {DB_URL_FOR_LOG} !!!")
 
-
-# --- Переменные окружения ---
 S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME")
 S3_REGION = os.getenv("S3_REGION")
 API_ID_STR = os.getenv("API_ID")
@@ -73,24 +66,16 @@ s3_client = boto3.client(
     region_name=S3_REGION
 )
 
-REDIS_URL = os.getenv("REDIS_URL") 
+REDIS_URL = os.getenv("REDIS_URL")
 if not REDIS_URL:
     logging.warning("REDIS_URL не установлен. Push-уведомления для API будут отключены.")
     redis_publisher = None
 else:
     redis_publisher = aioredis.from_url(REDIS_URL)
 
-# Настраиваем markdown-it с плагином для надежного поиска ссылок
 linkify = LinkifyIt()
 md = MarkdownIt()
 md.linkify = linkify
-
-# Настройки для Bleach, чтобы он не удалял полезные теги (включая ссылки)
-ALLOWED_TAGS = ['a', 'b', 'strong', 'i', 'em', 'pre', 'code', 'br']
-ALLOWED_ATTRIBUTES = {'a': ['href', 'title']}
-
-
-# Кэш для entity и статистика
 entity_cache = {}
 worker_stats = {
     'start_time': time.time(),
@@ -105,107 +90,35 @@ def signal_handler(signum, frame):
     shutdown_event.set()
 
 def process_text(message_text: str | None) -> str | None:
-    """
-    Принимает текст сообщения из Telethon (который уже в формате Markdown),
-    конвертирует его в HTML с помощью markdown-it-py и затем очищает
-    с помощью bleach для максимальной безопасности.
-    """
+    """Конвертирует Markdown в безопасный HTML."""
     if not message_text:
         return None
-
     try:
-        # 1. Конвертируем Markdown в HTML. Библиотека сама найдет ссылки.
         html_from_markdown = md_parser.renderInline(message_text)
-
-        # 2. Очищаем полученный HTML, разрешая только безопасные теги.
-        # Это защитит от любых вредоносных вставок.
         ALLOWED_TAGS = ['a', 'b', 'strong', 'i', 'em', 'pre', 'code', 'br', 's', 'u', 'blockquote']
         ALLOWED_ATTRIBUTES = {'a': ['href', 'title', 'target', 'rel']}
-        
         safe_html = bleach.clean(
             html_from_markdown,
             tags=ALLOWED_TAGS,
             attributes=ALLOWED_ATTRIBUTES,
             strip=False
         )
-
-        # 3. Добавляем к ссылкам target="_blank", чтобы они открывались в новой вкладке.
-        # Bleach не умеет это делать сам, поэтому используем простое добавление.
         return safe_html.replace('<a href', '<a target="_blank" rel="noopener noreferrer" href')
-
     except Exception as e:
         logging.error(f"Критическая ошибка конвертации Markdown: {e}", exc_info=True)
-        # В случае сбоя, возвращаем безопасный, экранированный текст.
         return escape(message_text).replace('\n', '<br>')
-    
-async def save_single_post(db_session: AsyncSession, post: Post, channel_title: str):
-    """Сохраняет один пост немедленно"""
-    try:
-        from sqlalchemy.dialects.postgresql import insert
-        
-        stmt = insert(Post).values(
-            channel_id=post.channel_id,
-            message_id=post.message_id,
-            text=post.text,
-            date=post.date,
-            grouped_id=post.grouped_id,
-            media=post.media,
-            views=post.views,
-            reactions=post.reactions,
-            forwarded_from=post.forwarded_from
-        )
-        
-        stmt = stmt.on_conflict_do_update(
-            constraint='_channel_message_uc',
-            set_=dict(
-                views=stmt.excluded.views,
-                reactions=stmt.excluded.reactions,
-                updated_at=func.now()
-            )
-        )
-        
-        await db_session.execute(stmt)
-        await db_session.commit()
-        logging.info(f"Сохранен пост {post.message_id} из канала «{channel_title}»")
-        if redis_publisher:
-                # Получаем ID всех пользователей, подписанных на этот канал
-                user_ids_query = select(Subscription.user_id).where(Subscription.channel_id == post.channel_id)
-                user_ids_result = await db_session.execute(user_ids_query)
-                user_ids = user_ids_result.scalars().all()
-
-                # Для каждого подписчика отправляем ID нового поста
-                for user_id in user_ids:
-                    # Канал для уведомлений будет user_feed:ID_ПОЛЬЗОВАТЕЛЯ
-                    channel_name = f"user_feed:{user_id}"
-                    # Отправляем ID поста
-                    await redis_publisher.publish(channel_name, str(post.id)) 
-            # --- КОНЕЦ ИЗМЕНЕНИЙ ---
-
-        return True
-    except Exception as e:
-        logging.error(f"Ошибка сохранения поста {post.message_id}: {e}")
-        await db_session.rollback()
-        return False
 
 async def get_cached_entity(channel: Channel):
-    """Получает entity с кэшированием"""
+    """Получает entity с кэшированием."""
     cache_key = channel.username or str(channel.id)
-
     if cache_key in entity_cache:
         return entity_cache[cache_key]
-
     try:
-        if channel.username:
-            entity = await client.get_entity(channel.username)
-        else:
-            entity = await client.get_entity(channel.id)
-
+        entity = await client.get_entity(channel.username) if channel.username else await client.get_entity(channel.id)
         if isinstance(entity, list):
             entity = entity[0]
-
         entity_cache[cache_key] = entity
         return entity
-
     except ValueError as e:
         logging.warning(f"Не удалось получить entity для канала {channel.title}: {e}")
         return None
@@ -214,7 +127,7 @@ async def get_cached_entity(channel: Channel):
         return None
 
 async def log_worker_stats():
-    """Логирует статистику работы воркера"""
+    """Логирует статистику работы воркера."""
     uptime = time.time() - worker_stats['start_time']
     logging.info(
         f"Статистика воркера: "
@@ -224,65 +137,106 @@ async def log_worker_stats():
         f"Ошибок: {worker_stats['errors']}"
     )
 
+async def upload_avatar_to_s3(channel_entity) -> str | None:
+    """Скачивает аватар канала, загружает в S3 и возвращает URL."""
+    try:
+        file_key = f"avatars/{channel_entity.id}.jpg"
+        file_in_memory = io.BytesIO()
+        await client.download_profile_photo(channel_entity, file=file_in_memory)
+        if file_in_memory.getbuffer().nbytes == 0:
+            logging.info(f"У канала «{channel_entity.title}» нет аватара.")
+            return None
+        file_in_memory.seek(0)
+        s3_client.upload_fileobj(
+            file_in_memory,
+            S3_BUCKET_NAME,
+            file_key,
+            ExtraArgs={'ContentType': 'image/jpeg'}
+        )
+        avatar_url = f"https://{S3_BUCKET_NAME}.s3.{S3_REGION}.amazonaws.com/{file_key}"
+        logging.info(f"Аватар для канала «{channel_entity.title}» загружен в S3: {avatar_url}")
+        return avatar_url
+    except Exception as e:
+        logging.error(f"Не удалось загрузить аватар для канала «{channel_entity.title}»: {e}")
+        worker_stats['errors'] += 1
+        return None
+
 async def upload_media_to_s3(message: types.Message, channel_id: int) -> tuple[int, dict | None]:
-    """Загружает медиафайл и его превью (для видео) в S3."""
+    """
+    Загружает медиа в S3 и возвращает кортеж (message_id, media_data).
+    """
     media_data = {}
     media_type = None
 
     if isinstance(message.media, types.MessageMediaDocument):
         file_size = getattr(message.media.document, 'size', 0)
-        if file_size > 60 * 1024 * 1024:
-            logging.warning(f"Файл для поста {message.id} слишком большой, пропускаем")
+        if file_size > 60 * 1024 * 1024:  # 60MB лимит
+            logging.warning(f"Файл для поста {message.id} ({file_size} bytes) слишком большой, пропускаем")
             return message.id, None
 
-    if isinstance(message.media, types.MessageMediaPhoto): media_type = 'photo'
+    if isinstance(message.media, types.MessageMediaPhoto):
+        media_type = 'photo'
     elif isinstance(message.media, types.MessageMediaDocument):
         mime_type = getattr(message.media.document, 'mime_type', '')
-        if mime_type.startswith('video/'): media_type = 'video'
-        elif mime_type.startswith('audio/'): media_type = 'audio'
-        elif mime_type in ['image/gif', 'video/mp4']: media_type = 'gif'
+        if mime_type.startswith('video/'):
+            media_type = 'video'
+        elif mime_type.startswith('audio/'):
+            media_type = 'audio'
+        elif mime_type in ['image/gif', 'video/mp4']:
+             media_type = 'gif'
 
-    if not media_type: return message.id, None
+    if not media_type:
+        return message.id, None
 
     try:
-        # ... (остальная логика определения file_key, content_type и загрузки)
         if media_type == 'photo':
             file_extension = '.webp'
             content_type = 'image/webp'
-        elif media_type in ['video', 'audio', 'gif'] and isinstance(message.media, types.MessageMediaDocument):
-            doc = message.media.document
-            file_name = next((attr.file_name for attr in getattr(doc, 'attributes', []) if hasattr(attr, 'file_name')), None)
-            file_extension = os.path.splitext(file_name)[1] if file_name else '.dat'
-            content_type = getattr(doc, 'mime_type', 'application/octet-stream')
+        elif media_type == 'gif':
+            file_extension = '.gif'
+            content_type = 'image/gif'
         else:
-            file_extension = '.dat'
-            content_type = 'application/octet-stream'
+            # Only access document if media is MessageMediaDocument
+            if isinstance(message.media, types.MessageMediaDocument):
+                doc = message.media.document
+                attributes = getattr(doc, 'attributes', [])
+                file_name = next((attr.file_name for attr in attributes if hasattr(attr, 'file_name')), None)
+                file_extension = os.path.splitext(file_name)[1] if file_name else '.dat'
+                content_type = getattr(doc, 'mime_type', 'application/octet-stream')
+            else:
+                file_extension = '.dat'
+                content_type = 'application/octet-stream'
+
         file_key = f"media/{channel_id}/{message.id}{file_extension}"
 
-        # Загружаем основной файл
         file_in_memory = io.BytesIO()
         await client.download_media(message, file=file_in_memory)
         file_in_memory.seek(0)
+
         if media_type == 'photo':
-            # Оптимизация изображений в WebP
             with Image.open(file_in_memory) as im:
                 im = im.convert("RGB")
                 output_buffer = io.BytesIO()
                 im.save(output_buffer, format="WEBP", quality=80)
                 output_buffer.seek(0)
                 file_in_memory = output_buffer
+        
         s3_client.upload_fileobj(file_in_memory, S3_BUCKET_NAME, file_key, ExtraArgs={'ContentType': content_type})
         
         media_data["type"] = media_type
         media_data["url"] = f"https://{S3_BUCKET_NAME}.s3.{S3_REGION}.amazonaws.com/{file_key}"
 
-        # Загружаем превью для видео
         document = getattr(message.media, 'document', None)
-        if media_type == 'video' and document and not isinstance(document, DocumentEmpty) and hasattr(document, 'thumbs') and document.thumbs:
+        if (
+            media_type == 'video'
+            and document and not isinstance(document, DocumentEmpty)
+            and hasattr(document, 'thumbs') and document.thumbs
+        ):
             thumb_key = f"media/{channel_id}/{message.id}_thumb.webp"
             thumb_in_memory = io.BytesIO()
             await client.download_media(message, thumb=-1, file=thumb_in_memory)
             thumb_in_memory.seek(0)
+
             if thumb_in_memory.getbuffer().nbytes > 0:
                 with Image.open(thumb_in_memory) as im:
                     im = im.convert("RGB")
@@ -293,127 +247,31 @@ async def upload_media_to_s3(message: types.Message, channel_id: int) -> tuple[i
                 media_data["thumbnail_url"] = f"https://{S3_BUCKET_NAME}.s3.{S3_REGION}.amazonaws.com/{thumb_key}"
         
         return message.id, media_data
+    
     except Exception as e:
         logging.error(f"Ошибка загрузки медиа для поста {message.id}: {e}", exc_info=True)
         return message.id, None
-    
 
-
-async def upload_avatar_to_s3(channel_entity) -> str | None:
-    """Скачивает аватар канала, загружает в S3 и возвращает URL."""
-    try:
-        file_key = f"avatars/{channel_entity.id}.jpg"
-        file_in_memory = io.BytesIO()
-        await client.download_profile_photo(channel_entity, file=file_in_memory)
-
-        if file_in_memory.getbuffer().nbytes == 0:
-            logging.info(f"У канала «{channel_entity.title}» нет аватара.")
-            return None
-
-        file_in_memory.seek(0)
-        s3_client.upload_fileobj(
-            file_in_memory,
-            S3_BUCKET_NAME,
-            file_key,
-            ExtraArgs={'ContentType': 'image/jpeg'}
-        )
-
-        avatar_url = f"https://{S3_BUCKET_NAME}.s3.{S3_REGION}.amazonaws.com/{file_key}"
-        logging.info(f"Аватар для канала «{channel_entity.title}» загружен в S3: {avatar_url}")
-        return avatar_url
-
-    except Exception as e:
-        logging.error(f"Не удалось загрузить аватар для канала «{channel_entity.title}»: {e}")
-        worker_stats['errors'] += 1
-        return None
-
-async def process_grouped_messages(grouped_messages, channel_id_for_log, db_session):
-    """Обрабатывает группу сообщений (альбом) как один пост,
-       корректно находя сообщение с текстом."""
-    if not grouped_messages:
-        return None
-
-    # --- НАЧАЛО ИСПРАВЛЕНИЯ ---
-    # 1. Сначала находим "главное" сообщение, у которого есть текст.
-    #    Оно может быть не первым в группе.
-    main_message = None
-    for m in sorted(grouped_messages, key=lambda msg: msg.id): # Сортируем для стабильности
-        if m.text:
-            main_message = m
-            break
-    
-    # Если текста нет ни в одном сообщении, просто берем первое как основное
-    # для получения ID, даты и т.д.
-    if main_message is None:
-        main_message = sorted(grouped_messages, key=lambda msg: msg.id)[0]
-    # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
-
-    # 2. Собираем медиафайлы из ВСЕХ сообщений группы
-    media_items = []
-    for msg in grouped_messages:
-        media_item = await upload_media_to_s3(msg, channel_id_for_log)
-        if media_item:
-            media_items.append(media_item)
-
-    # 3. Берем реакции и информацию о репосте из "главного" сообщения
-    reactions_data = []
-    if main_message.reactions and main_message.reactions.results:
-        for r in main_message.reactions.results:
-            if r.count > 0:
-                reaction_item = {"count": r.count}
-                if hasattr(r.reaction, 'emoticon') and r.reaction.emoticon:
-                    reaction_item["emoticon"] = r.reaction.emoticon
-                elif hasattr(r.reaction, 'document_id'):
-                    reaction_item["document_id"] = r.reaction.document_id
-                reactions_data.append(reaction_item)
-
-    forward_data = None
-    if main_message.fwd_from:
-        try:
-            if hasattr(main_message.fwd_from, 'from_id') and main_message.fwd_from.from_id:
-                source_entity = await client.get_entity(main_message.fwd_from.from_id)
-                from_name = getattr(source_entity, 'title', getattr(source_entity, 'first_name', 'Неизвестный источник'))
-                username = getattr(source_entity, 'username', None)
-                raw_channel_id = getattr(source_entity, 'id', None)
-                channel_id_str = str(raw_channel_id)[4:] if raw_channel_id and str(raw_channel_id).startswith('-100') else str(raw_channel_id) if raw_channel_id else None
-                forward_data = {"from_name": from_name, "username": username, "channel_id": channel_id_str}
-            elif hasattr(main_message.fwd_from, 'from_name') and main_message.fwd_from.from_name:
-                forward_data = {"from_name": main_message.fwd_from.from_name, "username": None, "channel_id": None}
-        except Exception as e:
-            logging.warning(f"Не удалось получить entity для репоста в альбоме: {e}")
-            forward_data = {"from_name": "Недоступный источник", "username": None, "channel_id": None}
-    
-    # 4. Обрабатываем текст из "главного" сообщения
-    processed_text = process_text(main_message.text)
-    
-    new_post = Post(
-        channel_id=channel_id_for_log,
-        message_id=main_message.id,
-        date=main_message.date,
-        text=processed_text,
-        grouped_id=main_message.grouped_id,
-        media=media_items,
-        views=getattr(main_message, 'views', 0) or 0,
-        reactions=reactions_data,
-        forwarded_from=forward_data
-    )
-    return new_post
 
 async def create_post_object(message: types.Message, channel_id: int) -> Post:
     """Вспомогательная функция для создания объекта Post из сообщения Telethon."""
-    processed_text = process_text(message.text)
+    processed_text = process_text(message.message)
+    
     reactions_data = []
     if message.reactions and message.reactions.results:
+        from telethon.tl.types import ReactionEmoji, ReactionCustomEmoji
         for r in message.reactions.results:
             if r.count > 0:
                 reaction_item = {"count": r.count}
-                if hasattr(r.reaction, 'emoticon'): reaction_item["emoticon"] = r.reaction.emoticon
-                elif hasattr(r.reaction, 'document_id'): reaction_item["document_id"] = r.reaction.document_id
+                # Check for ReactionEmoji (has 'emoticon') and ReactionCustomEmoji (has 'document_id')
+                if isinstance(r.reaction, ReactionEmoji):
+                    reaction_item["emoticon"] = r.reaction.emoticon # type: ignore
+                elif isinstance(r.reaction, ReactionCustomEmoji):
+                    reaction_item["document_id"] = r.reaction.document_id
                 reactions_data.append(reaction_item)
     
     forward_data = None
     if message.fwd_from:
-        # ... (логика обработки forward_data без изменений) ...
         try:
             if hasattr(message.fwd_from, 'from_id') and message.fwd_from.from_id:
                 source_entity = await client.get_entity(message.fwd_from.from_id)
@@ -427,7 +285,7 @@ async def create_post_object(message: types.Message, channel_id: int) -> Post:
         except Exception as e:
             logging.warning(f"Не удалось получить entity для репоста: {e}")
             forward_data = {"from_name": "Недоступный источник", "username": None, "channel_id": None}
-
+            
     return Post(
         channel_id=channel_id,
         message_id=message.id,
@@ -437,253 +295,96 @@ async def create_post_object(message: types.Message, channel_id: int) -> Post:
         views=getattr(message, 'views', 0) or 0,
         reactions=reactions_data,
         forwarded_from=forward_data,
-        media=[] # Медиа будет добавлено позже
+        media=[]  # Медиа будет добавлено позже
     )
 
-async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, post_limit: int = 10, offset_id: int = 0, real_time_save: bool = False):
+async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, post_limit: int = 20, offset_id: int = 0):
     """
-    Получает посты из канала и сохраняет их в базу данных.
+    Получает посты, параллельно загружает медиа и сохраняет в БД.
     """
-    channel_id_for_log = channel.id
-    channel_title_for_log = channel.title
-
+    channel_id = channel.id
+    channel_title = channel.title
     try:
         entity = await get_cached_entity(channel)
-        if not entity: 
-            logging.warning(f"Не удалось получить entity для канала {channel_title_for_log}")
+        if not entity:
+            logging.warning(f"Не удалось получить entity для канала {channel_title}")
             return
 
-        new_posts = []
-        updated_posts = []
-        grouped_messages = {}
-
-        # Итерируемся по сообщениям канала
+        posts_to_create_map = {}
+        media_upload_tasks = []
+        
+        # Шаг 1: Итерация по сообщениям
         async for message in client.iter_messages(entity, limit=post_limit, offset_id=offset_id):
-            if not message or (not message.text and not message.media and not message.poll):
-                continue
-            
-            # Обрабатываем групповые сообщения (альбомы) отдельно
-            if message.grouped_id:
-                grouped_messages.setdefault(message.grouped_id, []).append(message)
+            if not message or (not message.text and not message.media):
                 continue
 
-            # Проверяем, существует ли пост в базе данных
-            existing_post = await db_session.scalar(
-                select(Post).where(Post.channel_id == channel_id_for_log, Post.message_id == message.id)
+            # Пропускаем посты, которые уже есть (быстрая проверка)
+            existing_post_id = await db_session.scalar(
+                select(Post.id).where(Post.channel_id == channel_id, Post.message_id == message.id)
             )
-            
-            if existing_post:
-                # Обновляем существующий пост
-                needs_update = False
-                
-                # Проверка просмотров
-                new_views = getattr(message, 'views', 0) or 0
-                if existing_post.views != new_views:
-                    existing_post.views = new_views
-                    needs_update = True
-                
-                # Проверка реакций
-                new_reactions = []
-                if message.reactions and message.reactions.results:
-                    for r in message.reactions.results:
-                        if r.count > 0:
-                            reaction_data = {"count": r.count}
-                            if hasattr(r.reaction, 'emoticon') and r.reaction.emoticon:
-                                reaction_data["emoticon"] = r.reaction.emoticon
-                            elif hasattr(r.reaction, 'document_id'):
-                                reaction_data["document_id"] = r.reaction.document_id
-                            new_reactions.append(reaction_data)
-                
-                # Сравнение реакций без учета порядка
-                if sorted(existing_post.reactions or [], key=lambda x: str(x)) != sorted(new_reactions, key=lambda x: str(x)):
-                    existing_post.reactions = new_reactions
-                    needs_update = True
-                
-                # ИСПРАВЛЕНИЕ: Проверка текста с entities
-                new_text = process_text(message.text)
-                if existing_post.text != (new_text if new_text is not None else ""):
-                    existing_post.text = new_text if new_text is not None else ""
-                    needs_update = True
-
-                if needs_update:
-                    updated_posts.append(existing_post)
-
-            else:
-                # ИСПРАВЛЕНИЕ: Создаем новый пост с entities
-                processed_text = process_text(message.text)
-                media_item = await upload_media_to_s3(message, channel_id_for_log)
-                
-                # Обработка реакций
-                reactions_data = []
-                if message.reactions and message.reactions.results:
-                    for r in message.reactions.results:
-                        if r.count > 0:
-                            reaction_data = {"count": r.count}
-                            if hasattr(r.reaction, 'emoticon') and r.reaction.emoticon:
-                                reaction_data["emoticon"] = r.reaction.emoticon
-                            elif hasattr(r.reaction, 'document_id'):
-                                reaction_data["document_id"] = r.reaction.document_id
-                            reactions_data.append(reaction_data)
-                
-                # Обработка пересланных сообщений
-                forward_data = None
-                if message.fwd_from:
-                    try:
-                        if hasattr(message.fwd_from, 'from_id') and message.fwd_from.from_id:
-                            source_entity = await client.get_entity(message.fwd_from.from_id)
-                            from_name = getattr(source_entity, 'title', getattr(source_entity, 'first_name', 'Неизвестный источник'))
-                            username = getattr(source_entity, 'username', None)
-                            raw_channel_id = getattr(source_entity, 'id', None)
-                            channel_id = str(raw_channel_id)[4:] if raw_channel_id and str(raw_channel_id).startswith('-100') else str(raw_channel_id) if raw_channel_id else None
-                            forward_data = {"from_name": from_name, "username": username, "channel_id": channel_id}
-                        elif hasattr(message.fwd_from, 'from_name') and message.fwd_from.from_name:
-                            forward_data = {"from_name": message.fwd_from.from_name, "username": None, "channel_id": None}
-                    except Exception as e:
-                        logging.warning(f"Не удалось получить entity для репоста: {e}")
-                        forward_data = {"from_name": "Недоступный источник", "username": None, "channel_id": None}
-                
-                # Создаем объект поста
-                new_post = Post(
-                    channel_id=channel_id_for_log,
-                    message_id=message.id,
-                    date=message.date,
-                    text=processed_text,
-                    media=[media_item] if media_item else [],
-                    views=getattr(message, 'views', 0) or 0,
-                    reactions=reactions_data,
-                    forwarded_from=forward_data
-                )
-                new_posts.append(new_post)
-
-                # Сохранение в реальном времени (если включено)
-                if real_time_save:
-                    await save_single_post(db_session, new_post, channel_title_for_log)
-
-        # Обработка групповых сообщений (альбомов)
-        for group_id, messages in grouped_messages.items():
-            if not messages:
+            if existing_post_id:
                 continue
 
-            # Проверяем, существует ли групповой пост
-            existing_group_post = await db_session.scalar(
-                select(Post).where(Post.grouped_id == group_id)
-            )
+            # Создаем "скелет" поста и добавляем в словарь
+            new_post = await create_post_object(message, channel_id)
+            posts_to_create_map[message.id] = new_post
 
-            if not existing_group_post:
-                # Создаем новый групповой пост
-                group_post = await process_grouped_messages(messages, channel_id_for_log, db_session)
-                if group_post:
-                    new_posts.append(group_post)
-                    
-                    # Сохранение в реальном времени для групповых постов
-                    if real_time_save:
-                        await save_single_post(db_session, group_post, channel_title_for_log)
-            else:
-                # Обновляем существующий групповой пост
-                main_message = messages[0]
-                needs_update = False
-                
-                new_views = getattr(main_message, 'views', 0) or 0
-                if existing_group_post.views != new_views:
-                    existing_group_post.views = new_views
-                    needs_update = True
-                
-                if needs_update:
-                    updated_posts.append(existing_group_post)
-
-        # Сохранение в базу данных (только если не используется real_time_save)
-        if not real_time_save and (new_posts or updated_posts):
-            try:
-                if new_posts:
-                    from sqlalchemy.dialects.postgresql import insert
-                    
-                    for post in new_posts:
-                        stmt = insert(Post).values(
-                            channel_id=post.channel_id,
-                            message_id=post.message_id,
-                            text=post.text,
-                            date=post.date,
-                            grouped_id=post.grouped_id,
-                            media=post.media,
-                            views=post.views,
-                            reactions=post.reactions,
-                            forwarded_from=post.forwarded_from
-                        )
-                        
-                        # При конфликте - обновляем views и reactions
-                        stmt = stmt.on_conflict_do_update(
-                            constraint='_channel_message_uc',
-                            set_=dict(
-                                views=stmt.excluded.views,
-                                reactions=stmt.excluded.reactions,
-                                updated_at=func.now()
-                            )
-                        )
-                        
-                        await db_session.execute(stmt)
-                    
-                    await db_session.commit()
-                    logging.info(f"Создано/обновлено {len(new_posts)} постов для «{channel_title_for_log}»")
-                
-                # Сохранение обновлений существующих постов
-                if updated_posts:
-                    await db_session.commit()
-                    logging.info(f"Обновлено {len(updated_posts)} постов в «{channel_title_for_log}»")
-                    
-            except Exception as e:
-                logging.error(f"Ошибка сохранения постов для «{channel_title_for_log}»: {e}")
-                await db_session.rollback()
-                worker_stats['errors'] += 1
-                raise  # Поднимаем ошибку выше для корректной обработки
+            # Создаем задачу на загрузку медиа, если оно есть
+            if message.media:
+                media_upload_tasks.append(upload_media_to_s3(message, channel_id))
+        
+        # Шаг 2: Параллельное выполнение всех задач по загрузке медиа
+        if media_upload_tasks:
+            logging.info(f"Для «{channel_title}» запускаю параллельную загрузку {len(media_upload_tasks)} медиафайлов...")
+            start_time = time.time()
+            media_results_list = await asyncio.gather(*media_upload_tasks, return_exceptions=True)
+            end_time = time.time()
+            logging.info(f"Загрузка {len(media_upload_tasks)} медиа для «{channel_title}» заняла {end_time - start_time:.2f} сек.")
+            
+            # Превращаем список результатов в словарь для быстрого доступа
+            media_results_map = {
+                msg_id: media_data
+                for result in media_results_list
+                if not isinstance(result, BaseException)
+                for msg_id, media_data in [result]
+                if media_data
+            }
         else:
-            if not real_time_save:
-                logging.info(f"Нет изменений для канала «{channel_title_for_log}»")
+            media_results_map = {}
 
-        # Обновляем статистику
-        worker_stats['processed_posts'] += len(new_posts)
+        # Шаг 3: Прикрепляем результаты загрузки медиа к "скелетам" постов
+        posts_to_save = []
+        for msg_id, post_obj in posts_to_create_map.items():
+            if msg_id in media_results_map:
+                post_obj.media = [media_results_map[msg_id]]
+            posts_to_save.append(post_obj)
 
-    except ChannelPrivateError:
-        logging.warning(f"Канал «{channel_title_for_log}» стал приватным или недоступным")
-        worker_stats['errors'] += 1
-    except FloodWaitError as e:
-        logging.warning(f"Flood wait для канала «{channel_title_for_log}»: {e.seconds} секунд")
-        await asyncio.sleep(e.seconds)
-        worker_stats['errors'] += 1
+        # Шаг 4: Сохранение всех постов в базу данных
+        if posts_to_save:
+            db_session.add_all(posts_to_save)
+            await db_session.commit()
+            logging.info(f"Сохранено {len(posts_to_save)} новых постов для «{channel_title}»")
+            worker_stats['processed_posts'] += len(posts_to_save)
+        else:
+             logging.info(f"Нет новых постов для «{channel_title}»")
+
     except Exception as e:
-        logging.error(f"Критическая ошибка при обработке «{channel_title_for_log}»: {e}", exc_info=True)
+        logging.error(f"Критическая ошибка при обработке «{channel_title}»: {e}", exc_info=True)
         worker_stats['errors'] += 1
-        raise  # Поднимаем ошибку для обработки в вызывающем коде
-
+        await db_session.rollback()
 
 async def process_channel_safely(channel: Channel, semaphore: asyncio.Semaphore, post_limit: int):
-    """
-    Безопасная обертка для обработки одного канала.
-    Создает собственную сессию БД и отлавливает все ошибки.
-    """
+    """Безопасная обертка для обработки одного канала."""
     async with semaphore:
-        # Для каждой параллельной задачи создаем свою короткоживущую сессию
         async with session_maker() as session:
             try:
                 await fetch_posts_for_channel(channel, session, post_limit=post_limit)
             except Exception as e:
-                # Отлавливаем любые непредвиденные ошибки, чтобы не уронить весь gather
                 logging.error(f"Не удалось обработать канал {channel.title} из-за критической ошибки: {e}", exc_info=True)
 
 async def periodic_task_parallel():
-    """
-    Периодическая задача, которая обходит все каналы в базе данных
-    С ПАРАЛЛЕЛЬНОЙ ОБРАБОТКОЙ и корректной статистикой.
-    """
+    """Периодическая задача с параллельной обработкой каналов."""
     logging.info("Начинаю периодический сбор постов...")
-    
-    # --- ИСПРАВЛЕНИЕ: Сбрасываем счетчики для этого цикла ---
-    # Uptime и ошибки остаются общими, а счетчики каналов/постов - для цикла
-    cycle_stats = {
-        'channels': 0,
-        'posts': 0
-    }
-    # ----------------------------------------------------
-
     list_of_channels = []
     async with session_maker() as session:
         result = await session.execute(select(Channel))
@@ -693,96 +394,54 @@ async def periodic_task_parallel():
         logging.info("В базе нет каналов для отслеживания.")
         return
         
-    # Вместо инкремента глобального счетчика, будем передавать локальный
-    # В этой реализации это не нужно, так как мы просто считаем количество каналов
-    cycle_stats['channels'] = len(list_of_channels)
-
     semaphore = asyncio.Semaphore(15)
     tasks = [process_channel_safely(channel, semaphore, POST_LIMIT) for channel in list_of_channels]
 
-    if not tasks:
-        return
-        
-    logging.info(f"Запускаю обработку {len(tasks)} каналов параллельно...")
-    
-    await asyncio.gather(*tasks, return_exceptions=True)
+    if tasks:
+        logging.info(f"Запускаю обработку {len(tasks)} каналов параллельно...")
+        await asyncio.gather(*tasks)
     
     logging.info("Все каналы обработаны.")
-    
-    # Логируем статистику
-    uptime = time.time() - worker_stats['start_time']
-    logging.info(
-        f"Статистика воркера: Uptime: {uptime/3600:.1f}ч, "
-        f"Обработано в этом цикле: {cycle_stats['channels']} каналов, "
-        f"Ошибок (всего): {worker_stats['errors']}"
-    )
+    await log_worker_stats()
 
 
 async def backfill_user_channels(user_id: int):
-    """
-    Находит самые старые посты для каждого канала пользователя и запускает дозагрузку.
-    """
+    """Дозагрузка старых постов для пользователя."""
     logging.info(f"Начинаю дозагрузку старых постов для пользователя {user_id}...")
     async with session_maker() as db_session:
         from database.requests import get_user_subscriptions
         subscriptions = await get_user_subscriptions(db_session, user_id)
-
         if not subscriptions:
             logging.info(f"У пользователя {user_id} нет подписок для дозагрузки.")
             return
-
         for channel in subscriptions:
             oldest_post_query = (
-                select(Post)
+                select(Post.message_id)
                 .where(Post.channel_id == channel.id)
                 .order_by(Post.date.asc())
                 .limit(1)
             )
             oldest_post_res = await db_session.execute(oldest_post_query)
-            oldest_post = oldest_post_res.scalars().first()
-
-            offset_id = oldest_post.message_id if oldest_post else 0
+            oldest_post_id = oldest_post_res.scalar_one_or_none()
+            offset_id = oldest_post_id if oldest_post_id else 0
             logging.info(f"Для канала «{channel.title}» ищем посты старше message_id {offset_id}.")
             await fetch_posts_for_channel(
                 channel=channel,
                 db_session=db_session,
-                post_limit=20, # Можно увеличить лимит для дозагрузки
+                post_limit=20,
                 offset_id=offset_id
             )
-
     logging.info(f"Дозагрузка для пользователя {user_id} завершена.")
 
-async def periodic_task():
-    """
-    Периодическая задача, которая обходит все каналы в базе данных.
-    """
-    logging.info("Начинаю периодический сбор постов...")
-    async with session_maker() as db_session:
-        result = await db_session.execute(select(Channel))
-        channels = result.scalars().all()
-
-        if not channels:
-            logging.info("В базе нет каналов для отслеживания.")
-            return
-
-        for channel in channels:
-            await fetch_posts_for_channel(channel, db_session, post_limit=POST_LIMIT)
-
-    await log_worker_stats()
-
 async def process_backfill_requests():
-    """
-    Проверяет и обрабатывает заявки на дозагрузку.
-    """
+    """Обработка заявок на дозагрузку."""
     logging.info("Проверяю наличие заявок на дозагрузку...")
     async with session_maker() as db_session:
         result = await db_session.execute(select(BackfillRequest))
         requests = result.scalars().all()
-
         if not requests:
             logging.info("Новых заявок нет.")
             return
-
         for req in requests:
             logging.info(f"Найдена заявка для пользователя {req.user_id}. Начинаю обработку.")
             try:
@@ -795,70 +454,45 @@ async def process_backfill_requests():
                 await db_session.rollback()
                 worker_stats['errors'] += 1
 
-from database.engine import create_db
-
 async def main():
-    # Регистрируем обработчики сигналов в самом начале
+    """Основная функция запуска воркера."""
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
-
     await create_db()
     logging.info("Worker: Database tables checked/created.")
-
     max_retries = 3
     retry_count = 0
-
-    # Главный цикл, который проверяет и на количество попыток, и на сигнал завершения
     while retry_count < max_retries and not shutdown_event.is_set():
         try:
-            # Контекстный менеджер для клиента Telethon
             async with client:
                 logging.info("Клиент Telethon успешно запущен.")
-                # Сбрасываем счетчик попыток при успешном подключении
                 retry_count = 0 
-                
-                # Внутренний цикл работы, который прерывается сигналом shutdown
                 while not shutdown_event.is_set():
                     try:
-                        # Запускаем наши основные задачи
                         await asyncio.gather(
                             periodic_task_parallel(),
                             process_backfill_requests()
                         )
-                        
                         logging.info(f"Все задачи выполнены. Засыпаю на {SLEEP_TIME / 60:.1f} минут...")
-                        # Используем wait на событии вместо sleep.
-                        # Это позволяет мгновенно прервать "сон" при получении сигнала.
                         await asyncio.wait_for(shutdown_event.wait(), timeout=SLEEP_TIME)
-
-                    # TimeoutError - это не ошибка, а ожидаемое поведение, когда сон завершается
                     except asyncio.TimeoutError:
                         continue
-                    # Отлавливаем другие ошибки во внутреннем цикле, чтобы не "уронить" всю программу
                     except Exception as e:
                         logging.error(f"Ошибка в основном рабочем цикле: {e}", exc_info=True)
                         worker_stats['errors'] += 1
-                        await asyncio.sleep(10) # Короткая пауза перед следующей итерацией
-
-        # ЭТОТ БЛОК ТЕПЕРЬ ИСПРАВЛЕН
+                        await asyncio.sleep(10)
         except Exception as e:
-            # Этот блок отлавливает ошибки, связанные с самим клиентом Telethon (например, не удалось подключиться)
             retry_count += 1
             logging.error(f"Критическая ошибка клиента Telethon (попытка {retry_count}/{max_retries}): {e}")
             worker_stats['errors'] += 1
             if retry_count < max_retries:
-                logging.info(f"Повторная попытка подключения через 30 секунд...")
+                logging.info("Повторная попытка подключения через 30 секунд...")
                 await asyncio.sleep(30)
             else:
                 logging.error("Превышено максимальное количество попыток переподключения. Воркер останавливается.")
-                # Принудительно взводим событие, чтобы завершить цикл
                 shutdown_event.set()
-
     logging.info("Воркер корректно завершил работу.")
 
-# --- КОНЕЦ ИСПРАВЛЕННОЙ ФУНКЦИИ ---
-
-# Запускающий блок остается без изменений
 if __name__ == "__main__":
     try:
         asyncio.run(main())
