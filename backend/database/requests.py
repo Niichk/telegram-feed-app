@@ -5,12 +5,10 @@ from sqlalchemy import select, and_
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
-# --- ИЗМЕНЕНО: Функция теперь не принимает личные данные пользователя ---
+
 async def add_subscription(
     session: AsyncSession,
     user_id: int,
-    # user_fn: str, # УДАЛЕНО
-    # user_un: str, # УДАЛЕНО
     channel_id: int,
     channel_title: str,
     channel_un: str
@@ -35,6 +33,11 @@ async def add_subscription(
         user = User(id=user_id)
         session.add(user)
 
+    # --- ДОБАВЛЕНО: Проверка лимита подписок ---
+    if user.subscription_count >= 10:
+        return "🚫 Превышен лимит в 10 подписок. Чтобы добавить новый канал, сначала отпишитесь от старого.", None
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+    
     channel = await session.get(Channel, channel_id)
     if not channel:
         channel = Channel(id=channel_id, title=channel_title, username=channel_un)
