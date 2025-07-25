@@ -228,17 +228,30 @@ async def get_feed_for_user(
     feed = await db.get_user_feed(session=session, user_id=user_id, limit=limit, offset=offset)
 
     status = "ok"
-    if len(feed) < limit:
-        if page > 1 or (page == 1 and not feed):
-             request_exists = await db.check_backfill_request_exists(session, user_id)
-             if not request_exists:
-                 await db.create_backfill_request(session, user_id)
-             status = "backfilling"
-        if page == 1 and not feed:
-             status = "empty"
+    has_posts = bool(feed)
+
+    if not has_posts:
+        if page == 1:
+            # Если первая страница пуста, проверяем, есть ли у пользователя подписки
+            subscriptions = await db.get_user_subscriptions(session=session, user_id=user_id)
+            if subscriptions:
+                # Если подписки есть, а постов нет, значит идет фоновая загрузка
+                status = "backfilling"
+                # Дополнительно создаем заявку на дозагрузку на случай, если воркер ее пропустил
+                request_exists = await db.check_backfill_request_exists(session, user_id)
+                if not request_exists:
+                    await db.create_backfill_request(session, user_id)
+            else:
+                # Если нет ни постов, ни подписок - лента действительно пуста
+                status = "empty"
+        else:
+            # Если страница > 1 и постов нет - это конец ленты
+            status = "backfilling"
+    # Если посты есть, но их меньше лимита - это тоже конец ленты
+    elif len(feed) < limit:
+        status = "backfilling"
 
     return {"posts": feed, "status": status}
-
 
 @app.get("/health")
 async def health_check():
