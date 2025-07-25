@@ -233,7 +233,7 @@ function RadialLoader() {
   );
 }
 
-// --- ОСНОВНОЙ КОМПОНЕНТ С ИСПРАВЛЕННОЙ ЛОГИКОЙ ---
+// --- ОСНОВНОЙ КОМПОНЕНТ ---
 function App() {
     const [posts, setPosts] = useState([]);
     const [error, setError] = useState(null);
@@ -280,8 +280,8 @@ function App() {
             if (apiStatus === 'ok') {
                 setPageStatus('ready');
                 page.current += 1;
-            } else { // 'backfilling' или 'empty'
-                setPageStatus(apiStatus); // Устанавливаем финальный статус
+            } else { 
+                setPageStatus(apiStatus); 
             }
 
         } catch (err) {
@@ -332,7 +332,6 @@ function App() {
                     }
                     postMap.set(newPost.message_id, newPost);
                     const sortedPosts = Array.from(postMap.values()).sort((a, b) => new Date(b.date) - new Date(a.date));
-                    // Если лента была пуста, меняем статус
                     if (pageStatus === 'empty' || pageStatus === 'backfilling') {
                         setPageStatus('ready');
                     }
@@ -374,12 +373,10 @@ function App() {
             return <div className="status-message">Ошибка: {error}</div>;
         }
 
-        // Показываем скелетоны только при самой первой загрузке
         if (pageStatus === 'initial_loading' && posts.length === 0) {
             return [...Array(5)].map((_, i) => <SkeletonCard key={i} />);
         }
         
-        // Показываем лоадер, если идет фоновая загрузка пустой ленты
         if (pageStatus === 'backfilling' && posts.length === 0) {
              return (
                 <div className="status-message">
@@ -388,12 +385,10 @@ function App() {
             );
         }
         
-        // Показываем сообщение, если лента точно пуста
         if (pageStatus === 'empty' && posts.length === 0) {
              return <div className="status-message">Ваша лента пока пуста. Добавьте каналы через бота! 📱</div>;
         }
         
-        // Рендерим посты, если они есть
         return (
             <>
                 {posts.map(post => (
@@ -401,12 +396,20 @@ function App() {
                         <PostCard post={post} />
                     </ErrorBoundary>
                 ))}
-                {pageStatus === 'loading_more' && <div className="loader-container"><RadialLoader /></div>}
+                
+                {/* --- ИЗМЕНЕНИЯ ЗДЕСЬ --- */}
+                {pageStatus === 'loading_more' && (
+                    <div className="loader-container"><RadialLoader /></div>
+                )}
+
+                {/* Заменяем старое сообщение на новое, более информативное */}
                 {pageStatus === 'backfilling' && posts.length > 0 && (
                     <div className="status-message">
-                        Вы достигли конца ленты 🏁<br/><small>Новые посты появятся вверху.</small>
+                        Идет загрузка более старых постов... ⏳<br/>
                     </div>
                 )}
+                {/* ------------------------- */}
+                
                 <div ref={loaderRef} style={{ height: '1px' }}/>
             </>
         );
