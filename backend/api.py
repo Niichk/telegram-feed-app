@@ -160,13 +160,34 @@ def feed_key_builder(
     args=(),
     kwargs={},
 ):
-    user_id = kwargs.get("user_id")
-    page = kwargs.get("page", 1)
-    
-    if request is None or user_id is None:
-        return f"{namespace}:{getattr(request, 'url', None)}?{getattr(request, 'query_params', None)}:{time.time()}"
+    """
+    Создает ключ кеша, который зависит от ПОЛНОЙ строки авторизации (initData).
+    Это гарантирует, что для разных пользователей (и даже разных сессий
+    одного пользователя) будут созданы уникальные ключи, предотвращая
+    пересечение кеша между аккаунтами.
+    """
+    if request is None:
+        # Fallback для случаев, когда request недоступен
+        return f"{namespace}:{time.time()}"
 
-    return f"{namespace}:{request.url.path}:{user_id}:page={page}"
+    # Сначала пытаемся получить из заголовка, потом из query-параметра
+    auth_header = request.headers.get("authorization")
+    auth_query = request.query_params.get("authorization")
+    auth_string = auth_header or auth_query
+
+    # Если данных для авторизации нет, мы не можем создать пользовательский ключ
+    if not auth_string:
+        return f"{namespace}:{request.url.path}?{request.query_params}:{time.time()}"
+
+    # Используем криптографический хеш от всей строки авторизации.
+    # Это создает уникальный и безопасный идентификатор для ключа кеша.
+    unique_auth_hash = hashlib.sha256(auth_string.encode('utf-8')).hexdigest()
+
+    page = kwargs.get("page", 1) # Получаем номер страницы из аргументов функции
+
+    # Новый, безопасный ключ кеша
+    cache_key = f"{namespace}:{request.url.path}:{unique_auth_hash}:page={page}"
+    return cache_key
 
 
 # --- ЭНДПОИНТЫ ---
