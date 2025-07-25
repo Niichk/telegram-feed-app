@@ -3,6 +3,8 @@ import logging
 import os
 import sys
 from dotenv import load_dotenv
+import json
+import redis.asyncio as aioredis
 
 from aiogram import Bot, Dispatcher
 from aiogram.types import BotCommand
@@ -25,6 +27,37 @@ logging.info(f"!!! BOT STARTING WITH DATABASE_URL: {DB_URL_FOR_LOG} !!!")
 
 
 API_TOKEN = os.getenv("API_TOKEN")
+
+
+async def listen_for_task_results(bot: Bot):
+    """Слушает уведомления от воркера о завершенных задачах."""
+    REDIS_URL = os.getenv("REDIS_URL")
+    if not REDIS_URL:
+        return
+    
+    redis_client = aioredis.from_url(REDIS_URL)
+    pubsub = redis_client.pubsub()
+    await pubsub.subscribe("task_completion_notifications")
+    logging.info("Бот начал прослушивание уведомлений о завершении задач.")
+
+    while True:
+        try:
+            message = await pubsub.get_message(ignore_subscribe_messages=True)
+            if message and message.get("type") == "message":
+                task_result = json.loads(message["data"])
+                chat_id = task_result.get("user_chat_id")
+                channel_title = task_result.get("channel_title")
+                
+                if chat_id and channel_title:
+                    from handlers.user_commands import get_main_keyboard # Локальный импорт
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=f"👍 Готово! Последние посты из «{channel_title}» добавлены в вашу ленту.",
+                        reply_markup=get_main_keyboard()
+                    )
+        except Exception as e:
+            logging.error(f"Ошибка в обработчике уведомлений Redis: {e}")
+            await asyncio.sleep(5)
 
 
 async def main():
@@ -53,11 +86,9 @@ async def main():
     dp.include_router(feedback_handler.router)
 
     await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
-
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logging.info("Бот остановлен вручную")
+    
+    # Запускаем и бота, и слушателя уведомлений от воркера
+    await asyncio.gather(
+        dp.start_polling(bot),
+        listen_for_task_results(bot)
+    )

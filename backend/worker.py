@@ -6,6 +6,7 @@ import io
 import time
 import bleach
 import signal
+import json
 import redis.asyncio as aioredis
 from dotenv import load_dotenv
 from telethon import TelegramClient, types
@@ -359,6 +360,48 @@ async def process_channel_safely(channel: Channel, semaphore: asyncio.Semaphore,
                 logging.error(f"Не удалось обработать канал {channel.title} из-за критической ошибки: {e}", exc_info=True)
                 await worker_stats.increment_errors()
 
+
+async def listen_for_new_channel_tasks():
+    """Слушает очередь в Redis и запускает обработку новых каналов."""
+    if not redis_publisher:
+        return
+
+    logging.info("Воркер начал прослушивание задач на добавление каналов...")
+    redis_client = await redis_publisher.get_connection()
+
+    while not shutdown_event.is_set():
+        try:
+            # Блокирующая операция: ждем задачу из списка new_channel_tasks
+            _, task_data_raw = await redis_client.brpop("new_channel_tasks")
+            task_data = json.loads(task_data_raw)
+            
+            channel_id = task_data.get("channel_id")
+            user_chat_id = task_data.get("user_chat_id")
+            channel_title = task_data.get("channel_title")
+
+            logging.info(f"Получена задача на обработку канала ID {channel_id}")
+
+            async with session_maker() as session:
+                channel = await session.get(Channel, channel_id)
+                if channel:
+                    # Выполняем всю тяжелую работу
+                    entity = await get_cached_entity(channel)
+                    if entity:
+                        await upload_avatar_to_s3(entity) # Здесь используется основной клиент воркера
+                    await fetch_posts_for_channel(channel, session, post_limit=20)
+
+                    # Отправляем уведомление о завершении обратно боту
+                    completion_message = {
+                        "user_chat_id": user_chat_id,
+                        "channel_title": channel_title
+                    }
+                    await redis_publisher.publish("task_completion_notifications", json.dumps(completion_message))
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logging.error(f"Ошибка в обработчике задач Redis: {e}", exc_info=True)
+            await asyncio.sleep(5)
+
 async def periodic_task_parallel():
     """Периодическая обработка всех каналов, у которых есть подписчики"""
     logging.info("Начинаю периодический сбор постов...")
@@ -434,10 +477,17 @@ async def main():
         try:
             async with client:
                 logging.info("Клиент Telethon успешно запущен.")
-                retry_count = 0
+                retry_count = 0 
                 while not shutdown_event.is_set():
                     try:
-                        await asyncio.gather(periodic_task_parallel(), process_backfill_requests())
+                        # Запускаем обе задачи параллельно
+                        await asyncio.gather(
+                            periodic_task_parallel(),
+                            process_backfill_requests(),
+                            listen_for_new_channel_tasks() # <--- НАША НОВАЯ ЗАДАЧА
+                        )
+                        # Этот блок теперь не будет достигаться, так как gather будет работать вечно
+                        # Но на случай если все задачи вдруг завершатся, оставляем логику сна
                         logging.info(f"Все задачи выполнены. Засыпаю на {SLEEP_TIME / 60:.1f} минут...")
                         await asyncio.wait_for(shutdown_event.wait(), timeout=SLEEP_TIME)
                     except asyncio.TimeoutError: continue
@@ -457,9 +507,3 @@ async def main():
     if redis_publisher:
         await redis_publisher.close()
     logging.info("Воркер корректно завершил работу.")
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        logging.info("Приложение остановлено.")

@@ -1,66 +1,28 @@
-from aiogram import Router, types, F
-from sqlalchemy.ext.asyncio import AsyncSession
-from database.requests import add_subscription
-from worker import fetch_posts_for_channel, upload_avatar_to_s3, client
-from database.engine import session_maker
-from database.models import Channel
-import logging
+# backend/handlers/forwarded_messages.py
+
 import asyncio
+import logging
+import json
 from collections import defaultdict
+from aiogram import F, Router, types
+from sqlalchemy.ext.asyncio import AsyncSession
+import redis.asyncio as aioredis
+import os
+
+from database.requests import add_subscription
 from .user_commands import get_main_keyboard
 
 router = Router()
-
 user_locks = defaultdict(asyncio.Lock)
 PROCESSED_MEDIA_GROUPS = set()
+
+# Инициализируем Redis клиент для отправки задач воркеру
+REDIS_URL = os.getenv("REDIS_URL")
+redis_client = aioredis.from_url(REDIS_URL) if REDIS_URL else None
 
 async def remove_media_group_id_after_delay(media_group_id: str, delay: int):
     await asyncio.sleep(delay)
     PROCESSED_MEDIA_GROUPS.discard(media_group_id)
-
-# --- ИЗМЕНЕННАЯ ФУНКЦИЯ ДЛЯ ФОНОВОЙ ЗАДАЧИ ---
-async def process_new_channel_background(message: types.Message, channel_id: int):
-    """
-    Эта функция выполняется в фоне, принимая ID канала, а не объект.
-    """
-    # Создаем новую, независимую сессию БД для этой задачи
-    async with session_maker() as session:
-        try:
-            # Получаем "свежий" объект канала из БД по ID
-            channel_obj = await session.get(Channel, channel_id)
-            if not channel_obj:
-                logging.error(f"Фоновая задача не смогла найти канал с ID {channel_id}")
-                return
-
-            if not client.is_connected():
-                await client.connect()
-
-            entity_identifier = channel_obj.username or channel_obj.id
-            channel_entity = await client.get_entity(entity_identifier)
-
-            avatar_url = await upload_avatar_to_s3(channel_entity)
-            if avatar_url:
-                # Обновляем аватар в рамках нашей сессии
-                channel_obj.avatar_url = avatar_url
-                session.add(channel_obj)
-                await session.commit()
-
-            # Запускаем загрузку постов
-            await fetch_posts_for_channel(channel=channel_obj, db_session=session, post_limit=20)
-
-            # После успешной загрузки отправляем финальное сообщение
-            await message.answer(
-                f"👍 Готово! Последние посты из «{channel_obj.title}» добавлены в вашу ленту.",
-                reply_markup=get_main_keyboard()
-            )
-            
-        except Exception as e:
-            # Если любая из операций выше провалится, мы сообщим об этом
-            logging.error(f"Критическая ошибка при фоновой обработке канала {channel_id}: {e}", exc_info=True)
-            await message.answer(
-                f"❌ Произошла ошибка при загрузке постов. Пожалуйста, попробуйте добавить канал еще раз.",
-                reply_markup=get_main_keyboard()
-            )
 
 @router.message(F.forward_from_chat)
 async def handle_forwarded_message(message: types.Message, session: AsyncSession):
@@ -75,7 +37,6 @@ async def handle_forwarded_message(message: types.Message, session: AsyncSession
         return
 
     user_lock = user_locks[message.from_user.id]
-
     async with user_lock:
         if not message.forward_from_chat or message.forward_from_chat.type != 'channel':
             await message.reply("Это не похоже на канал. Пожалуйста, перешлите сообщение из публичного канала.")
@@ -94,7 +55,16 @@ async def handle_forwarded_message(message: types.Message, session: AsyncSession
     
     await message.answer(response_message)
 
-    if new_channel_obj:
-        # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
-        # Передаем в фоновую задачу только ID, а не весь объект
-        asyncio.create_task(process_new_channel_background(message, new_channel_obj.id))
+    if new_channel_obj and redis_client:
+        try:
+            # Создаем "тикет" для воркера
+            task_payload = {
+                "user_chat_id": message.chat.id,
+                "channel_id": new_channel_obj.id,
+                "channel_title": new_channel_obj.title,
+            }
+            # Отправляем тикет в очередь 'new_channel_tasks'
+            await redis_client.lpush("new_channel_tasks", json.dumps(task_payload))
+            logging.info(f"Создана задача на обработку канала {new_channel_obj.id} для пользователя {user.id}")
+        except Exception as e:
+            logging.error(f"Не удалось создать задачу в Redis для нового канала: {e}")
