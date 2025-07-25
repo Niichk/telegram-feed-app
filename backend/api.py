@@ -34,12 +34,12 @@ from slowapi.errors import RateLimitExceeded
 load_dotenv()
 
 # --- КОНФИГУРАЦИЯ ---
-limiter = Limiter(key_func=lambda request: "global") # Будет переопределено ниже
+limiter = Limiter(key_func=lambda request: "global")
 BOT_TOKEN = os.getenv("API_TOKEN")
 REDIS_URL = os.getenv("REDIS_URL")
 FRONTEND_URL = os.getenv("FRONTEND_URL")
 IS_DEVELOPMENT = os.getenv("ENVIRONMENT") == "development"
-PAGE_SIZE = 20 # Определяем размер страницы как константу
+PAGE_SIZE = 20
 
 # --- ИНИЦИАЛИЗАЦИЯ APP ---
 app = FastAPI(title="Feed Reader API")
@@ -86,6 +86,16 @@ def is_valid_tma_data(init_data: str) -> Optional[dict]:
     except Exception as e:
         logging.error(f"TMA validation error: {e}")
         return None
+
+async def DYNAMIC_CACHE_CONTROL(response: Response):
+    """
+    Эта зависимость добавляет заголовки, которые запрещают
+    браузеру/клиенту кэшировать ответ. Это заставляет его
+    всегда обращаться к нашему серверу за свежими данными.
+    """
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
 
 def get_user_id_from_request(request: Request) -> str:
     # ИСПРАВЛЕНИЕ: Игнорируем OPTIONS запросы в rate limiter
@@ -232,7 +242,7 @@ async def stream_user_posts(
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
-@app.get("/api/feed/", response_model=schemas.FeedResponse)
+@app.get("/api/feed/", response_model=schemas.FeedResponse, dependencies=[Depends(DYNAMIC_CACHE_CONTROL)])
 @cache(expire=120, key_builder=feed_key_builder)
 @limiter.limit("30/minute")
 async def get_feed_for_user(
@@ -241,28 +251,21 @@ async def get_feed_for_user(
     session: AsyncSession = Depends(get_db_session),
     page: int = Query(1, ge=1)
 ):
-    # ФИКС ЛОГИКИ СТАТУСОВ
+    # Тело функции остается таким же, как в последней версии
     offset = (page - 1) * PAGE_SIZE
     feed = await db.get_user_feed(session=session, user_id=user_id, limit=PAGE_SIZE, offset=offset)
     has_posts = bool(feed)
 
-    # Случай 1: Первая страница пуста
     if page == 1 and not has_posts:
         subscriptions = await db.get_user_subscriptions(session=session, user_id=user_id)
         if subscriptions:
-            # Подписки есть, постов нет -> идет фоновая загрузка.
             if not await db.check_backfill_request_exists(session, user_id):
                  await db.create_backfill_request(session, user_id)
             return {"posts": [], "status": "backfilling"}
         else:
-            # Нет ни постов, ни подписок -> лента действительно пуста.
             return {"posts": [], "status": "empty"}
 
-    # Случай 2: Посты есть или это не первая страница.
-    # Если постов меньше, чем мы просили, значит, это конец истории.
-    # Фронтенд должен прекратить запрашивать следующие страницы.
     status = "backfilling" if len(feed) < PAGE_SIZE else "ok"
-
     return {"posts": feed, "status": status}
 
 

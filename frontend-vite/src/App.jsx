@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef, Component } from 'react';
 
-// --- Вспомогательные компоненты --- (без изменений)
+// --- Вспомогательные компоненты ---
+
 class ErrorBoundary extends Component {
     constructor(props) {
         super(props);
@@ -48,12 +49,112 @@ const SkeletonCard = () => (
     </div>
 );
 
+const PostMedia = React.memo(({ media }) => {
+    const [currentIndex, setCurrentIndex] = useState(0);
+    const [imageErrors, setImageErrors] = useState(new Set());
+    const [isVideoPlayed, setVideoPlayed] = useState(false);
+
+    if (!media || media.length === 0) return null;
+
+    const visualMedia = media.filter(item => item.type === 'photo' || item.type === 'video' || item.type === 'gif');
+    const audioMedia = media.filter(item => item.type === 'audio');
+
+    if (visualMedia.length === 0 && audioMedia.length === 0) return null;
+
+    const goToPrevious = () => setCurrentIndex(prev => (prev === 0 ? visualMedia.length - 1 : prev - 1));
+    const goToNext = () => setCurrentIndex(prev => (prev === visualMedia.length - 1 ? 0 : prev + 1));
+
+    const handleImageError = useCallback((url) => {
+        setImageErrors(prev => new Set([...prev, url]));
+    }, []);
+
+    const handlePlayVideo = (e) => {
+        const container = e.currentTarget.closest('.video-container');
+        if (container) {
+            const video = container.querySelector('video');
+            if (video) {
+                video.play();
+                video.controls = true;
+                setVideoPlayed(true);
+            }
+        }
+    };
+    
+    useEffect(() => {
+        setVideoPlayed(false);
+    }, [currentIndex]);
+
+
+    return (
+        <>
+            {visualMedia.length > 0 && (
+                <div className="post-media-gallery">
+                    {visualMedia.map((item, index) => (
+                        <div key={item.url || index} className={`slider-item ${index === currentIndex ? 'active' : ''}`}>
+                            {item.type === 'photo' && (
+                                imageErrors.has(item.url) ? (
+                                    <div className="image-placeholder">Не удалось загрузить изображение</div>
+                                ) : (
+                                    <img 
+                                        src={item.url} 
+                                        className="post-media-visual" 
+                                        alt={`Изображение ${index + 1}`} 
+                                        loading="lazy"
+                                        onError={() => handleImageError(item.url)}
+                                    />
+                                )
+                            )}
+                            
+                            {item.type === 'video' && (
+                                <div className="video-container">
+                                    <video 
+                                        muted 
+                                        playsInline 
+                                        className="post-media-visual"
+                                        preload="metadata"
+                                        poster={item.thumbnail_url || undefined}
+                                        controls={false}
+                                    >
+                                        <source src={item.url} type="video/mp4" />
+                                        Ваш браузер не поддерживает видео.
+                                    </video>
+                                    
+                                    {!isVideoPlayed && (
+                                        <div 
+                                            className="video-play-overlay"
+                                            onClick={handlePlayVideo}
+                                        >
+                                            <div className="video-play-button">▶️</div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    ))}
+                    {visualMedia.length > 1 && (
+                        <>
+                            <button onClick={goToPrevious} className="slider-button prev">&lt;</button>
+                            <button onClick={goToNext} className="slider-button next">&gt;</button>
+                            <div className="slider-counter">{`${currentIndex + 1} / ${visualMedia.length}`}</div>
+                        </>
+                    )}
+                </div>
+            )}
+            {audioMedia.map((item, index) => (
+                <audio key={index} controls className="post-media-audio">
+                    <source src={item.url} />
+                </audio>
+            ))}
+        </>
+    );
+});
+
+
 const PostCard = React.memo(({ post }) => {
-    // Внутренняя логика PostCard остается без изменений
     const formatDate = (dateString) => new Date(dateString).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
     const getPostUrl = (p) => p.channel.username ? `https://t.me/${p.channel.username}/${p.message_id}` : `https://t.me/c/${String(p.channel.id).replace("-100", "")}/${p.message_id}`;
     const postUrl = getPostUrl(post);
-    const hasVisualMedia = post.media && post.media.some(item => item.type === 'photo' || item.type === 'video');
+    const hasVisualMedia = post.media && post.media.some(item => item.type === 'photo' || item.type === 'video' || item.type === 'gif');
     const channelUrl = post.channel.username ? `https://t.me/${post.channel.username}` : '#';
 
     return (
@@ -117,93 +218,7 @@ const PostCard = React.memo(({ post }) => {
     );
 });
 
-const PostMedia = React.memo(({ media }) => {
-    // Внутренняя логика PostMedia остается без изменений
-    const [currentIndex, setCurrentIndex] = useState(0);
-    const [imageErrors, setImageErrors] = useState(new Set());
-
-    if (!media || media.length === 0) return null;
-    
-    const visualMedia = media.filter(item => item.type === 'photo' || item.type === 'video' || item.type === 'gif');
-    const audioMedia = media.filter(item => item.type === 'audio');
-
-    if (visualMedia.length === 0 && audioMedia.length === 0) return null;
-
-    const goToPrevious = () => setCurrentIndex(prev => (prev === 0 ? visualMedia.length - 1 : prev - 1));
-    const goToNext = () => setCurrentIndex(prev => (prev === visualMedia.length - 1 ? 0 : prev + 1));
-
-    const handleImageError = useCallback((url) => {
-        setImageErrors(prev => new Set([...prev, url]));
-    }, []);
-
-    return (
-        <>
-            {visualMedia.length > 0 && (
-                <div className="post-media-gallery">
-                    {visualMedia.map((item, index) => (
-                        <div key={item.url || index} className={`slider-item ${index === currentIndex ? 'active' : ''}`}>
-                            {item.type === 'photo' && (
-                                imageErrors.has(item.url) ? (
-                                    <div className="image-placeholder">Не удалось загрузить изображение</div>
-                                ) : (
-                                    <img 
-                                        src={item.url} 
-                                        className="post-media-visual" 
-                                        alt={`Изображение ${index + 1}`} 
-                                        loading="lazy"
-                                        onError={() => handleImageError(item.url)}
-                                    />
-                                )
-                            )}
-                            {item.type === 'video' && (
-                                <div className="video-container">
-                                    <video 
-                                        muted 
-                                        playsInline 
-                                        className="post-media-visual"
-                                        preload="metadata"
-                                        poster={item.thumbnail_url || undefined}
-                                        controls={false}
-                                        onClick={(e) => {
-                                            const video = e.currentTarget;
-                                            if (video.paused) {
-                                                video.controls = true;
-                                                video.play();
-                                            }
-                                        }}
-                                    >
-                                        <source src={item.url} type="video/mp4" />
-                                        Your browser does not support the video tag.
-                                    </video>
-                                    {!item.thumbnail_url && (
-                                         <div className="video-play-overlay">
-                                            <div className="video-play-button">▶️</div>
-                                        </div>
-                                    )}
-                                </div>
-                            )}
-                        </div>
-                    ))}
-                    {visualMedia.length > 1 && (
-                        <>
-                            <button onClick={goToPrevious} className="slider-button prev">&lt;</button>
-                            <button onClick={goToNext} className="slider-button next">&gt;</button>
-                            <div className="slider-counter">{`${currentIndex + 1} / ${visualMedia.length}`}</div>
-                        </>
-                    )}
-                </div>
-            )}
-            {audioMedia.map((item, index) => (
-                <audio key={index} controls className="post-media-audio">
-                    <source src={item.url} />
-                </audio>
-            ))}
-        </>
-    );
-});
-
 function Header({ onRefresh, onScrollUp }) {
-    // Внутренняя логика Header остается без изменений
     const handleButtonPress = (e, action) => {
         e.preventDefault();
         e.stopPropagation();
@@ -233,7 +248,6 @@ function RadialLoader() {
   );
 }
 
-// --- ОСНОВНОЙ КОМПОНЕНТ ---
 function App() {
     const [posts, setPosts] = useState([]);
     const [error, setError] = useState(null);
@@ -242,7 +256,7 @@ function App() {
     const page = useRef(1);
     const loaderRef = useRef(null);
     const isFetchingRef = useRef(false);
-
+    
     const fetchPosts = useCallback(async (isRefresh = false) => {
         if (isFetchingRef.current) return;
         if (pageStatus !== 'ready' && pageStatus !== 'initial_loading' && !isRefresh) return;
@@ -252,6 +266,7 @@ function App() {
         if (isRefresh) {
             page.current = 1;
             setError(null);
+            setPosts([]); // Очищаем посты принудительно при обновлении
             setPageStatus('initial_loading');
         } else if (page.current > 1) {
             setPageStatus('loading_more');
@@ -272,16 +287,16 @@ function App() {
             
             setPosts(prev => {
                 const currentPosts = isRefresh ? [] : prev;
-                const postMap = new Map(currentPosts.map(p => [p.message_id, p]));
-                newPosts.forEach(p => postMap.set(p.message_id, p));
+                const postMap = new Map(currentPosts.map(p => [`${p.channel.id}-${p.message_id}`, p]));
+                newPosts.forEach(p => postMap.set(`${p.channel.id}-${p.message_id}`, p));
                 return Array.from(postMap.values()).sort((a, b) => new Date(b.date) - new Date(a.date));
             });
 
             if (apiStatus === 'ok') {
                 setPageStatus('ready');
                 page.current += 1;
-            } else { 
-                setPageStatus(apiStatus); 
+            } else {
+                setPageStatus(apiStatus);
             }
 
         } catch (err) {
@@ -293,14 +308,6 @@ function App() {
         }
     }, [pageStatus]);
 
-    // Инициализация и подгрузка постов
-    useEffect(() => {
-        if (pageStatus === 'initial_loading') {
-            fetchPosts();
-        }
-    }, [pageStatus, fetchPosts]);
-    
-    // Настройка Telegram Web App
     useEffect(() => {
         const tg = window.Telegram.WebApp;
         if (tg) {
@@ -308,11 +315,34 @@ function App() {
             const applyTheme = () => document.body.className = tg.colorScheme;
             applyTheme();
             tg.onEvent('themeChanged', applyTheme);
+
+            try {
+                if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
+                    const newUserId = tg.initDataUnsafe.user.id;
+                    const storedUserId = sessionStorage.getItem('tg_user_id');
+
+                    if (storedUserId && storedUserId !== String(newUserId)) {
+                        console.warn("User account has changed. Forcing a full refresh.");
+                        sessionStorage.setItem('tg_user_id', newUserId);
+                        fetchPosts(true); // Принудительное обновление с очисткой
+                    } else {
+                        sessionStorage.setItem('tg_user_id', newUserId);
+                        if (pageStatus === 'initial_loading') {
+                            fetchPosts();
+                        }
+                    }
+                } else {
+                    throw new Error("Не удалось определить пользователя Telegram.");
+                }
+            } catch (e) {
+                setError(e.message);
+                setPageStatus('error');
+            }
+
             return () => tg.offEvent('themeChanged', applyTheme);
         }
-    }, []);
-
-    // Подключение к SSE
+    }, [fetchPosts]);
+    
     useEffect(() => {
         const initData = window.Telegram?.WebApp?.initData;
         if (!initData || pageStatus === 'initial_loading') {
@@ -326,11 +356,11 @@ function App() {
             try {
                 const newPost = JSON.parse(event.data);
                 setPosts(prevPosts => {
-                    const postMap = new Map(prevPosts.map(p => [p.message_id, p]));
-                    if (!postMap.has(newPost.message_id)) {
+                    const postMap = new Map(prevPosts.map(p => [`${p.channel.id}-${p.message_id}`, p]));
+                    if (!postMap.has(`${newPost.channel.id}-${newPost.message_id}`)) {
                          window.Telegram?.WebApp?.HapticFeedback?.notificationOccurred('success');
                     }
-                    postMap.set(newPost.message_id, newPost);
+                    postMap.set(`${newPost.channel.id}-${newPost.message_id}`, newPost);
                     const sortedPosts = Array.from(postMap.values()).sort((a, b) => new Date(b.date) - new Date(a.date));
                     if (pageStatus === 'empty' || pageStatus === 'backfilling') {
                         setPageStatus('ready');
@@ -350,7 +380,6 @@ function App() {
         return () => eventSource.close();
     }, [pageStatus]);
 
-    // Infinite scroll
     useEffect(() => {
         const observer = new IntersectionObserver(
             (entries) => {
@@ -367,7 +396,6 @@ function App() {
     const handleRefresh = useCallback(() => fetchPosts(true), [fetchPosts]);
     const scrollToTop = () => window.scrollTo({ top: 0, behavior: 'smooth' });
 
-    // --- ЛОГИКА РЕНДЕРИНГА ---
     const renderContent = () => {
         if (pageStatus === 'error') {
             return <div className="status-message">Ошибка: {error}</div>;
@@ -397,18 +425,14 @@ function App() {
                     </ErrorBoundary>
                 ))}
                 
-                {/* --- ИЗМЕНЕНИЯ ЗДЕСЬ --- */}
-                {pageStatus === 'loading_more' && (
-                    <div className="loader-container"><RadialLoader /></div>
-                )}
-
-                {/* Заменяем старое сообщение на новое, более информативное */}
+                {pageStatus === 'loading_more' && <div className="loader-container"><RadialLoader /></div>}
+                
                 {pageStatus === 'backfilling' && posts.length > 0 && (
                     <div className="status-message">
-                        Идет загрузка более старых постов... ⏳<br/>
+                        Идет фоновая загрузка более старых постов... ⏳<br/>
+                        <small>Новые посты появятся вверху автоматически.</small>
                     </div>
                 )}
-                {/* ------------------------- */}
                 
                 <div ref={loaderRef} style={{ height: '1px' }}/>
             </>
