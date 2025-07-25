@@ -288,56 +288,63 @@ function App() {
 
     // --- ЗАГРУЗКА ИСТОРИИ (старые посты) ---
     const fetchPosts = useCallback(async (isRefresh = false) => {
-        if (isFetchingRef.current || (!hasMore && !isRefresh)) return;
-        
-        isFetchingRef.current = true;
-        setIsFetching(true);
-        
-        if (isRefresh) {
-            page.current = 1;
-            setPosts([]); // Очищаем посты при ручном обновлении
-            setError(null);
-            setHasMore(true);
-            setIsBackfilling(false);
+    console.log('fetchPosts called:', { isRefresh, isFetching: isFetchingRef.current, hasMore, initialLoading });
+    
+    if (isFetchingRef.current || (!hasMore && !isRefresh)) return;
+    
+    isFetchingRef.current = true;
+    setIsFetching(true);
+    
+    if (isRefresh) {
+        page.current = 1;
+        setPosts([]);
+        setError(null);
+        setHasMore(true);
+        setIsBackfilling(false);
+    }
+
+    try {
+        const response = await fetch(
+            `https://telegram-feed-app-production.up.railway.app/api/feed/?page=${page.current}`,
+            { headers: { 'Authorization': `tma ${window.Telegram.WebApp.initData}` } }
+        );
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ detail: `HTTP ошибка: ${response.status}` }));
+            throw new Error(errorData.detail);
         }
 
-        try {
-            const response = await fetch(
-                `https://telegram-feed-app-production.up.railway.app/api/feed/?page=${page.current}`,
-                { headers: { 'Authorization': `tma ${window.Telegram.WebApp.initData}` } }
-            );
+        const { posts: newPosts, status } = await response.json();
+        console.log('API response:', { postsCount: newPosts.length, status });
+        
+        setPosts(prev => {
+            const existingIds = new Set(prev.map(p => `${p.channel.id}-${p.message_id}`));
+            const uniqueNewPosts = newPosts.filter(p => !existingIds.has(`${p.channel.id}-${p.message_id}`));
+            const result = isRefresh ? uniqueNewPosts : [...prev, ...uniqueNewPosts];
+            console.log('Posts updated:', { prev: prev.length, new: uniqueNewPosts.length, total: result.length });
+            return result;
+        });
 
-            if (!response.ok) {
-                const errorData = await response.json().catch(() => ({ detail: `HTTP ошибка: ${response.status}` }));
-                throw new Error(errorData.detail);
-            }
-
-            const { posts: newPosts, status } = await response.json();
-            
-            setPosts(prev => {
-                const existingIds = new Set(prev.map(p => `${p.channel.id}-${p.message_id}`));
-                const uniqueNewPosts = newPosts.filter(p => !existingIds.has(`${p.channel.id}-${p.message_id}`));
-                return isRefresh ? uniqueNewPosts : [...prev, ...uniqueNewPosts];
-            });
-
-            page.current += 1;
-            
-            if (status === "backfilling") {
-                setIsBackfilling(true);
-                setHasMore(false); // Мы достигли конца истории, теперь ждем дозагрузки
-            } else {
-                setHasMore(newPosts.length > 0);
-            }
-        } catch (err) {
-            console.error('Fetch history error:', err);
-            setError(err.message);
+        page.current += 1;
+        
+        if (status === "backfilling") {
+            setIsBackfilling(true);
             setHasMore(false);
-        } finally {
-            isFetchingRef.current = false;
-            setIsFetching(false);
-            if (isRefresh || initialLoading) setInitialLoading(false);
+        } else {
+            setHasMore(newPosts.length > 0);
         }
-    }, [hasMore, initialLoading]);
+    } catch (err) {
+        console.error('Fetch history error:', err);
+        setError(err.message);
+        setHasMore(false);
+    } finally {
+        isFetchingRef.current = false;
+        setIsFetching(false);
+        if (initialLoading) {
+            setInitialLoading(false);
+        }
+    }
+}, [hasMore, initialLoading]);
 
     // --- ЭФФЕКТЫ ---
 
@@ -451,12 +458,9 @@ function App() {
             </>
         );
     }
-
-    if (error) {
-        return <div className="status-message">Ошибка: {error}</div>;
-    }
     
-    if (posts.length === 0 && !initialLoading) {
+    // ИСПРАВЛЕНИЕ: Добавляем проверку на загрузку БЕЗ постов
+    if (posts.length === 0) {
         return (
             <>
                 <Header onRefresh={handleRefresh} onScrollUp={scrollToTop} />
@@ -475,6 +479,7 @@ function App() {
         );
     }
 
+    // Основной рендер ленты с постами
     return (
         <>
             <Header onRefresh={handleRefresh} onScrollUp={scrollToTop} />
