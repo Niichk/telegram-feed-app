@@ -1,4 +1,3 @@
-# backend/handlers/forwarded_messages.py
 import asyncio
 import logging
 import json
@@ -33,11 +32,11 @@ async def handle_forwarded_message(message: types.Message, session: AsyncSession
     if new_channel and redis_client:
         try:
             task = {
-                "user_chat_id": str(message.chat.id), # Преобразуем в строку
-                "channel_id": str(new_channel.id),    # Преобразуем в строку
+                "user_chat_id": str(message.chat.id),
+                "channel_id": str(new_channel.id),
                 "channel_title": new_channel.title,
             }
-            await redis_client.lpush("new_channel_tasks", json.dumps(task))  
+            await redis_client.lpush("new_channel_tasks", json.dumps(task))
             logging.info(f"Создана задача на обработку канала {new_channel.id}")
         except Exception as e:
             logging.error(f"Не удалось создать задачу в Redis: {e}")

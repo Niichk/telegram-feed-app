@@ -1,4 +1,3 @@
-# backend/main.py
 import asyncio
 import logging
 import os
@@ -16,10 +15,9 @@ from middlewares.db import DbSessionMiddleware
 
 load_dotenv()
 API_TOKEN = os.getenv("API_TOKEN")
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 async def listen_for_task_results(bot: Bot):
-    """Слушает уведомления от воркера о завершенных задачах."""
     REDIS_URL = os.getenv("REDIS_URL")
     if not REDIS_URL: return
     
@@ -30,7 +28,7 @@ async def listen_for_task_results(bot: Bot):
 
     while True:
         try:
-            message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=None) # Ждем вечно
+            message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=None)
             if message:
                 task_result = json.loads(message["data"])
                 chat_id = task_result.get("user_chat_id")
