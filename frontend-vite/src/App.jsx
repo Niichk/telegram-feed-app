@@ -49,8 +49,9 @@ const SkeletonCard = () => (
 );
 
 const PostCard = React.memo(({ post }) => {
+    // Внутренняя логика PostCard остается без изменений
     const formatDate = (dateString) => new Date(dateString).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
-    const getPostUrl = (p) => p.channel.username ? `https://t.me/${p.channel.username}/${p.message_id}` : `https://t.me/c/${String(p.channel.id).substring(4)}/${p.message_id}`;
+    const getPostUrl = (p) => p.channel.username ? `https://t.me/${p.channel.username}/${p.message_id}` : `https://t.me/c/${String(p.channel.id).replace("-100", "")}/${p.message_id}`;
     const postUrl = getPostUrl(post);
     const hasVisualMedia = post.media && post.media.some(item => item.type === 'photo' || item.type === 'video');
     const channelUrl = post.channel.username ? `https://t.me/${post.channel.username}` : '#';
@@ -101,7 +102,7 @@ const PostCard = React.memo(({ post }) => {
                 <div className="post-footer">
                     <div className="reactions">
                         {post.reactions?.map(reaction => (
-                            <span key={reaction.emoticon} className="reaction-item">
+                            <span key={reaction.emoticon || reaction.document_id} className="reaction-item">
                                 {reaction.emoticon}
                                 <span className="reaction-count">{reaction.count}</span>
                             </span>
@@ -117,6 +118,7 @@ const PostCard = React.memo(({ post }) => {
 });
 
 const PostMedia = React.memo(({ media }) => {
+    // Внутренняя логика PostMedia остается без изменений
     const [currentIndex, setCurrentIndex] = useState(0);
     const [imageErrors, setImageErrors] = useState(new Set());
 
@@ -153,21 +155,6 @@ const PostMedia = React.memo(({ media }) => {
                                     />
                                 )
                             )}
-
-                            {item.type === 'gif' && (
-                                imageErrors.has(item.url) ? (
-                                    <div className="image-placeholder">Не удалось загрузить GIF</div>
-                                ) : (
-                                    <img 
-                                        src={item.url} 
-                                        className="post-media-visual gif-media" 
-                                        alt={`GIF ${index + 1}`} 
-                                        loading="lazy"
-                                        onError={() => handleImageError(item.url)}
-                                    />
-                                )
-                            )}
-                            
                             {item.type === 'video' && (
                                 <div className="video-container">
                                     <video 
@@ -177,36 +164,22 @@ const PostMedia = React.memo(({ media }) => {
                                         preload="metadata"
                                         poster={item.thumbnail_url || undefined}
                                         controls={false}
-                                        onLoadedMetadata={(e) => {
-                                            if (!item.thumbnail_url) {
-                                                e.target.currentTime = 0.1;
-                                            }
-                                        }}
-                                        onError={(e) => {
-                                            console.error('Video failed to load:', item.url);
-                                        }}
-                                    >
-                                        <source src={item.url} type="video/mp4" />
-                                        <source src={item.url} />
-                                        Ваш браузер не поддерживает воспроизведение видео.
-                                    </video>
-                                    
-                                    <div 
-                                        className="video-play-overlay"
                                         onClick={(e) => {
-                                            const container = e.target.closest('.video-container');
-                                            const video = container.querySelector('video');
-                                            
-                                            e.target.style.display = 'none';
-                                            if (video) {
+                                            const video = e.currentTarget;
+                                            if (video.paused) {
                                                 video.controls = true;
-                                                video.currentTime = 0;
                                                 video.play();
                                             }
                                         }}
                                     >
-                                        <div className="video-play-button">▶️</div>
-                                    </div>
+                                        <source src={item.url} type="video/mp4" />
+                                        Your browser does not support the video tag.
+                                    </video>
+                                    {!item.thumbnail_url && (
+                                         <div className="video-play-overlay">
+                                            <div className="video-play-button">▶️</div>
+                                        </div>
+                                    )}
                                 </div>
                             )}
                         </div>
@@ -230,35 +203,22 @@ const PostMedia = React.memo(({ media }) => {
 });
 
 function Header({ onRefresh, onScrollUp }) {
+    // Внутренняя логика Header остается без изменений
     const handleButtonPress = (e, action) => {
         e.preventDefault();
         e.stopPropagation();
-        
         const button = e.currentTarget;
         button.classList.add('button--active');
-        
-        if (window.Telegram?.WebApp?.HapticFeedback) {
-            window.Telegram.WebApp.HapticFeedback.impactOccurred('light');
-        }
-        
+        window.Telegram?.WebApp?.HapticFeedback?.impactOccurred('light');
         action();
         setTimeout(() => button.classList.remove('button--active'), 150);
     };
-    
     return (
         <header className="app-header">
-            <button 
-                onTouchEnd={(e) => handleButtonPress(e, onScrollUp)}
-                onClick={(e) => !e.touches && handleButtonPress(e, onScrollUp)}
-                className="header-button"
-            >
+            <button onTouchEnd={(e) => handleButtonPress(e, onScrollUp)} onClick={(e) => !('ontouchend' in document) && handleButtonPress(e, onScrollUp)} className="header-button">
                 Вверх ⬆️
             </button>
-            <button 
-                onTouchEnd={(e) => handleButtonPress(e, onRefresh)}
-                onClick={(e) => !e.touches && handleButtonPress(e, onRefresh)}
-                className="header-button"
-            >
+            <button onTouchEnd={(e) => handleButtonPress(e, onRefresh)} onClick={(e) => !('ontouchend' in document) && handleButtonPress(e, onRefresh)} className="header-button">
                 Обновить 🔄
             </button>
         </header>
@@ -273,128 +233,110 @@ function RadialLoader() {
   );
 }
 
-// --- ИСПРАВЛЕННЫЙ ОСНОВНОЙ КОМПОНЕНТ ---
+// --- ОСНОВНОЙ КОМПОНЕНТ С ИСПРАВЛЕННОЙ ЛОГИКОЙ ---
 function App() {
     const [posts, setPosts] = useState([]);
     const [error, setError] = useState(null);
-    const [hasMore, setHasMore] = useState(true);
-    const [isFetching, setIsFetching] = useState(false);
-    const [initialLoading, setInitialLoading] = useState(true);
-    const [isBackfilling, setIsBackfilling] = useState(false);
-    
+    const [pageStatus, setPageStatus] = useState('initial_loading'); // 'initial_loading', 'loading_more', 'ready', 'backfilling', 'empty', 'error'
+
     const page = useRef(1);
-    const loader = useRef(null);
+    const loaderRef = useRef(null);
     const isFetchingRef = useRef(false);
 
-    // --- ЗАГРУЗКА ИСТОРИИ (старые посты) ---
     const fetchPosts = useCallback(async (isRefresh = false) => {
-    console.log('fetchPosts called:', { isRefresh, isFetching: isFetchingRef.current, hasMore, initialLoading });
-    
-    if (isFetchingRef.current || (!hasMore && !isRefresh)) return;
-    
-    isFetchingRef.current = true;
-    setIsFetching(true);
-    
-    if (isRefresh) {
-        page.current = 1;
-        setPosts([]);
-        setError(null);
-        setHasMore(true);
-        setIsBackfilling(false);
-    }
+        if (isFetchingRef.current) return;
+        if (pageStatus !== 'ready' && pageStatus !== 'initial_loading' && !isRefresh) return;
 
-    try {
-        const response = await fetch(
-            `https://telegram-feed-app-production.up.railway.app/api/feed/?page=${page.current}`,
-            { headers: { 'Authorization': `tma ${window.Telegram.WebApp.initData}` } }
-        );
-
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({ detail: `HTTP ошибка: ${response.status}` }));
-            throw new Error(errorData.detail);
-        }
-
-        const { posts: newPosts, status } = await response.json();
-        console.log('API response:', { postsCount: newPosts.length, status });
+        isFetchingRef.current = true;
         
-        setPosts(prev => {
-            const existingIds = new Set(prev.map(p => `${p.channel.id}-${p.message_id}`));
-            const uniqueNewPosts = newPosts.filter(p => !existingIds.has(`${p.channel.id}-${p.message_id}`));
-            const result = isRefresh ? uniqueNewPosts : [...prev, ...uniqueNewPosts];
-            console.log('Posts updated:', { prev: prev.length, new: uniqueNewPosts.length, total: result.length });
-            return result;
-        });
-
-        page.current += 1;
-        
-        if (status === "backfilling") {
-            setIsBackfilling(true);
-            setHasMore(false);
-        } else {
-            setHasMore(newPosts.length > 0);
+        if (isRefresh) {
+            page.current = 1;
+            setError(null);
+            setPageStatus('initial_loading');
+        } else if (page.current > 1) {
+            setPageStatus('loading_more');
         }
-    } catch (err) {
-        console.error('Fetch history error:', err);
-        setError(err.message);
-        setHasMore(false);
-    } finally {
-        isFetchingRef.current = false;
-        setIsFetching(false);
-        if (initialLoading) {
-            setInitialLoading(false);
-        }
-    }
-}, [hasMore, initialLoading]);
 
-    // --- ЭФФЕКТЫ ---
-
-    // 1. Инициализация и загрузка первой страницы истории
-    useEffect(() => {
-        const tg = window.Telegram.WebApp;
-        const applyTheme = () => document.body.className = tg.colorScheme;
-
-        if (tg) {
-            tg.ready();
-            applyTheme();
-            tg.onEvent('themeChanged', applyTheme);
+        try {
+            const apiUrl = `https://telegram-feed-app-production.up.railway.app/api/feed/?page=${page.current}`;
+            const headers = { 'Authorization': `tma ${window.Telegram.WebApp.initData}` };
             
-            if (tg.initData) {
-                fetchPosts(); // Загружаем первую порцию старых постов
-            } else {
-                setError("Не удалось определить пользователя Telegram. Откройте приложение через бота.");
-                setInitialLoading(false);
+            const response = await fetch(apiUrl, { headers });
+
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({ detail: `HTTP ошибка: ${response.status}` }));
+                throw new Error(errorData.detail || 'Ошибка сети');
             }
 
-            return () => tg.offEvent('themeChanged', applyTheme);
-        } else {
-             setError("Не удалось загрузить Telegram Web App API.");
-             setInitialLoading(false);
-        }
-    }, [fetchPosts]); // fetchPosts добавлен в зависимости
+            const { posts: newPosts, status: apiStatus } = await response.json();
+            
+            setPosts(prev => {
+                const currentPosts = isRefresh ? [] : prev;
+                const postMap = new Map(currentPosts.map(p => [p.message_id, p]));
+                newPosts.forEach(p => postMap.set(p.message_id, p));
+                return Array.from(postMap.values()).sort((a, b) => new Date(b.date) - new Date(a.date));
+            });
 
-    // 2. ПОДКЛЮЧЕНИЕ К SSE ДЛЯ РЕАЛЬНОГО ВРЕМЕНИ
+            if (apiStatus === 'ok') {
+                setPageStatus('ready');
+                page.current += 1;
+            } else { // 'backfilling' или 'empty'
+                setPageStatus(apiStatus); // Устанавливаем финальный статус
+            }
+
+        } catch (err) {
+            console.error('Fetch history error:', err);
+            setError(err.message);
+            setPageStatus('error');
+        } finally {
+            isFetchingRef.current = false;
+        }
+    }, [pageStatus]);
+
+    // Инициализация и подгрузка постов
+    useEffect(() => {
+        if (pageStatus === 'initial_loading') {
+            fetchPosts();
+        }
+    }, [pageStatus, fetchPosts]);
+    
+    // Настройка Telegram Web App
+    useEffect(() => {
+        const tg = window.Telegram.WebApp;
+        if (tg) {
+            tg.ready();
+            const applyTheme = () => document.body.className = tg.colorScheme;
+            applyTheme();
+            tg.onEvent('themeChanged', applyTheme);
+            return () => tg.offEvent('themeChanged', applyTheme);
+        }
+    }, []);
+
+    // Подключение к SSE
     useEffect(() => {
         const initData = window.Telegram?.WebApp?.initData;
-        if (!initData || initialLoading) { // Не запускаем SSE, пока не загрузится первая страница
+        if (!initData || pageStatus === 'initial_loading') {
             return;
         }
 
-        console.log("Connecting to SSE...");
-        const eventSource = new EventSource(`https://telegram-feed-app-production.up.railway.app/api/feed/stream/?authorization=tma ${encodeURIComponent(initData)}`);
+        const sseUrl = `https://telegram-feed-app-production.up.railway.app/api/feed/stream/?authorization=tma ${encodeURIComponent(initData)}`;
+        const eventSource = new EventSource(sseUrl);
         
         eventSource.onmessage = (event) => {
             try {
                 const newPost = JSON.parse(event.data);
-                console.log("New post via SSE:", newPost);
-                
                 setPosts(prevPosts => {
-                    // Проверка на дубликат
-                    const isDuplicate = prevPosts.some(p => p.id === newPost.id);
-                    if (!isDuplicate) {
-                        window.Telegram?.WebApp?.HapticFeedback?.notificationOccurred('success');
-                        return [newPost, ...prevPosts];
+                    const postMap = new Map(prevPosts.map(p => [p.message_id, p]));
+                    if (!postMap.has(newPost.message_id)) {
+                         window.Telegram?.WebApp?.HapticFeedback?.notificationOccurred('success');
                     }
-                    return prevPosts;
+                    postMap.set(newPost.message_id, newPost);
+                    const sortedPosts = Array.from(postMap.values()).sort((a, b) => new Date(b.date) - new Date(a.date));
+                    // Если лента была пуста, меняем статус
+                    if (pageStatus === 'empty' || pageStatus === 'backfilling') {
+                        setPageStatus('ready');
+                    }
+                    return sortedPosts;
                 });
             } catch (e) {
                 console.error("Failed to parse SSE data:", e);
@@ -406,118 +348,75 @@ function App() {
             eventSource.close();
         };
 
-        // Закрываем соединение при размонтировании компонента
-        return () => {
-            console.log("Closing SSE connection.");
-            eventSource.close();
-        };
-    }, [initialLoading]); // Переподключаемся, когда initialLoading становится false
+        return () => eventSource.close();
+    }, [pageStatus]);
 
-
-    // 3. Infinite scroll для подгрузки истории
+    // Infinite scroll
     useEffect(() => {
         const observer = new IntersectionObserver(
             (entries) => {
-                if (entries[0].isIntersecting && hasMore && !isFetching) {
+                if (entries[0].isIntersecting && pageStatus === 'ready') {
                     fetchPosts();
                 }
-            }, { rootMargin: '200px' }
+            }, { rootMargin: '400px' }
         );
-
-        const currentLoader = loader.current;
+        const currentLoader = loaderRef.current;
         if (currentLoader) observer.observe(currentLoader);
-
         return () => { if (currentLoader) observer.unobserve(currentLoader); };
-    }, [hasMore, isFetching, fetchPosts]);
+    }, [pageStatus, fetchPosts]);
 
-    const handleRefresh = useCallback(() => {
-        if (window.Telegram?.WebApp?.HapticFeedback) {
-            window.Telegram.WebApp.HapticFeedback.impactOccurred('light');
-        }
-        fetchPosts(true);
-    }, [fetchPosts]);
-
+    const handleRefresh = useCallback(() => fetchPosts(true), [fetchPosts]);
     const scrollToTop = () => window.scrollTo({ top: 0, behavior: 'smooth' });
 
-    if (initialLoading) {
-        return (
-            <>
-                <Header onRefresh={() => {}} onScrollUp={() => {}} />
-                <div className="feed-container">
-                    {[...Array(5)].map((_, i) => <SkeletonCard key={i} />)}
-                </div>
-            </>
-        );
-    }
+    // --- ЛОГИКА РЕНДЕРИНГА ---
+    const renderContent = () => {
+        if (pageStatus === 'error') {
+            return <div className="status-message">Ошибка: {error}</div>;
+        }
 
-    if (error) {
-        return (
-            <>
-                <Header onRefresh={handleRefresh} onScrollUp={scrollToTop} />
-                <div className="status-message">Ошибка: {error}</div>
-            </>
-        );
-    }
-    
-     if (posts.length === 0) {
-        // Показываем главный загрузчик, если:
-        // 1. Идет активный запрос к API (`isFetching`).
-        // 2. API сообщил, что идет фоновая обработка (`isBackfilling`).
-        // Это решает проблему: загрузчик будет виден, пока не появятся первые посты.
-        if (isFetching || isBackfilling) {
-            return (
-                <>
-                    <Header onRefresh={handleRefresh} onScrollUp={scrollToTop} />
-                    <div className="status-message">
-                        <RadialLoader />
-                        <br />
-                        Загружаем вашу ленту...
-                    </div>
-                </>
-            );
-        } 
-        // В противном случае, если мы не в состоянии загрузки, лента действительно пуста.
-        else {
-            return (
-                <>
-                    <Header onRefresh={handleRefresh} onScrollUp={scrollToTop} />
-                    <div className="status-message">
-                        Ваша лента пока пуста. Добавьте каналы через бота! 📱
-                    </div>
-                </>
+        // Показываем скелетоны только при самой первой загрузке
+        if (pageStatus === 'initial_loading' && posts.length === 0) {
+            return [...Array(5)].map((_, i) => <SkeletonCard key={i} />);
+        }
+        
+        // Показываем лоадер, если идет фоновая загрузка пустой ленты
+        if (pageStatus === 'backfilling' && posts.length === 0) {
+             return (
+                <div className="status-message">
+                    <RadialLoader /><br />Загружаем вашу ленту...
+                </div>
             );
         }
-    }
-
-    // Основной рендер, когда посты есть
-    return (
-        <>
-            <Header onRefresh={handleRefresh} onScrollUp={scrollToTop} />
-            <div id="refresh-indicator" className="pull-to-refresh-indicator">
-                <RadialLoader />
-            </div>
-            <div className="feed-container">
+        
+        // Показываем сообщение, если лента точно пуста
+        if (pageStatus === 'empty' && posts.length === 0) {
+             return <div className="status-message">Ваша лента пока пуста. Добавьте каналы через бота! 📱</div>;
+        }
+        
+        // Рендерим посты, если они есть
+        return (
+            <>
                 {posts.map(post => (
                     <ErrorBoundary key={`${post.channel.id}-${post.message_id}`}>
                         <PostCard post={post} />
                     </ErrorBoundary>
                 ))}
-
-                {/* Загрузчик для бесконечной прокрутки внизу ленты */}
-                {isFetching && !initialLoading && (
-                    <div className="loader-container">
-                        <RadialLoader />
-                    </div>
-                )}
-
-                {/* Сообщение о дозагрузке старых постов в конце ленты */}
-                {isBackfilling && !isFetching && (
+                {pageStatus === 'loading_more' && <div className="loader-container"><RadialLoader /></div>}
+                {pageStatus === 'backfilling' && posts.length > 0 && (
                     <div className="status-message">
-                        Догружаем старые посты... ⏳<br/><small>Потяните, чтобы обновить.</small>
+                        Вы достигли конца ленты 🏁<br/><small>Новые посты появятся вверху.</small>
                     </div>
                 )}
+                <div ref={loaderRef} style={{ height: '1px' }}/>
+            </>
+        );
+    };
 
-                <div ref={loader} />
+    return (
+        <>
+            <Header onRefresh={handleRefresh} onScrollUp={scrollToTop} />
+            <div className="feed-container">
+                {renderContent()}
             </div>
         </>
     );

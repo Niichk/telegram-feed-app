@@ -16,7 +16,7 @@ from urllib.parse import parse_qsl, unquote
 from database import requests as db
 from database import schemas
 from database.engine import create_db, session_maker
-from database.models import Post
+from database.models import Post, Subscription # Убедимся, что Subscription импортирована
 from database.schemas import PostInFeed
 from worker import backfill_user_channels
 
@@ -39,6 +39,7 @@ BOT_TOKEN = os.getenv("API_TOKEN")
 REDIS_URL = os.getenv("REDIS_URL")
 FRONTEND_URL = os.getenv("FRONTEND_URL")
 IS_DEVELOPMENT = os.getenv("ENVIRONMENT") == "development"
+PAGE_SIZE = 20 # Определяем размер страницы как константу
 
 # --- ИНИЦИАЛИЗАЦИЯ APP ---
 app = FastAPI(title="Feed Reader API")
@@ -142,9 +143,11 @@ async def get_current_user_id(
 async def on_startup():
     await create_db()
     if REDIS_URL:
-        redis_client = aioredis.from_url(REDIS_URL, encoding="utf8", decode_responses=True)
+        # ГЛАВНЫЙ ФИКС: Убираем `decode_responses=True`.
+        # Библиотека fastapi-cache ожидает байты, а не строки, от Redis.
+        redis_client = aioredis.from_url(REDIS_URL, encoding="utf8")
         FastAPICache.init(RedisBackend(redis_client), prefix="fastapi-cache")
-        logging.info("FastAPI-Cache with Redis backend is initialized.")
+        logging.info("FastAPI-Cache with Redis backend is initialized correctly.")
 
 
 # --- КЛЮЧ КЭШИРОВАНИЯ ---
@@ -157,15 +160,9 @@ def feed_key_builder(
     args=(),
     kwargs={},
 ):
-    """
-    Создает ключ кеша, используя УЖЕ ВАЛИДИРОВАННЫЙ user_id из аргументов функции.
-    Это защищает от проблемы с кешированием initData на стороне клиента.
-    """
-    # Извлекаем user_id и page из аргументов, переданных в get_feed_for_user
     user_id = kwargs.get("user_id")
     page = kwargs.get("page", 1)
     
-    # Если по какой-то причине user_id не был передан, создаем уникальный ключ, чтобы избежать коллизий
     if request is None or user_id is None:
         return f"{namespace}:{getattr(request, 'url', None)}?{getattr(request, 'query_params', None)}:{time.time()}"
 
@@ -195,13 +192,13 @@ async def stream_user_posts(
                 if message and message.get("type") == "message":
                     post_id_str = message.get("data")
                     if post_id_str and post_id_str.isdigit():
-                        post_id = int(post_id_str)
-                        post = await session.get(Post, post_id, options=[selectinload(Post.channel)])
+                        # Загружаем пост в новой сессии, чтобы избежать проблем с состоянием
+                        async with session_maker() as post_session:
+                           post = await post_session.get(Post, int(post_id_str), options=[selectinload(Post.channel)])
                         if post:
                             post_data = PostInFeed.model_validate(post).model_dump_json()
                             yield f"data: {post_data}\n\n"
                 
-                # Heartbeat для поддержания соединения
                 yield f"event: heartbeat\ndata: \n\n"
                 await asyncio.sleep(15)
 
@@ -223,35 +220,30 @@ async def get_feed_for_user(
     session: AsyncSession = Depends(get_db_session),
     page: int = Query(1, ge=1)
 ):
-    limit = 20
-    offset = (page - 1) * limit
-    feed = await db.get_user_feed(session=session, user_id=user_id, limit=limit, offset=offset)
-
-    status = "ok"
+    # ФИКС ЛОГИКИ СТАТУСОВ
+    offset = (page - 1) * PAGE_SIZE
+    feed = await db.get_user_feed(session=session, user_id=user_id, limit=PAGE_SIZE, offset=offset)
     has_posts = bool(feed)
 
-    if not has_posts:
-        if page == 1:
-            # Если первая страница пуста, проверяем, есть ли у пользователя подписки
-            subscriptions = await db.get_user_subscriptions(session=session, user_id=user_id)
-            if subscriptions:
-                # Если подписки есть, а постов нет, значит идет фоновая загрузка
-                status = "backfilling"
-                # Дополнительно создаем заявку на дозагрузку на случай, если воркер ее пропустил
-                request_exists = await db.check_backfill_request_exists(session, user_id)
-                if not request_exists:
-                    await db.create_backfill_request(session, user_id)
-            else:
-                # Если нет ни постов, ни подписок - лента действительно пуста
-                status = "empty"
+    # Случай 1: Первая страница пуста
+    if page == 1 and not has_posts:
+        subscriptions = await db.get_user_subscriptions(session=session, user_id=user_id)
+        if subscriptions:
+            # Подписки есть, постов нет -> идет фоновая загрузка.
+            if not await db.check_backfill_request_exists(session, user_id):
+                 await db.create_backfill_request(session, user_id)
+            return {"posts": [], "status": "backfilling"}
         else:
-            # Если страница > 1 и постов нет - это конец ленты
-            status = "backfilling"
-    # Если посты есть, но их меньше лимита - это тоже конец ленты
-    elif len(feed) < limit:
-        status = "backfilling"
+            # Нет ни постов, ни подписок -> лента действительно пуста.
+            return {"posts": [], "status": "empty"}
+
+    # Случай 2: Посты есть или это не первая страница.
+    # Если постов меньше, чем мы просили, значит, это конец истории.
+    # Фронтенд должен прекратить запрашивать следующие страницы.
+    status = "backfilling" if len(feed) < PAGE_SIZE else "ok"
 
     return {"posts": feed, "status": status}
+
 
 @app.get("/health")
 async def health_check():
