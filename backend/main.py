@@ -73,11 +73,14 @@ async def main():
     bot = Bot(token=API_TOKEN)
     dp = Dispatcher()
     
-    # Инициализируем Redis в handlers
     if REDIS_URL:
-        # Устанавливаем REDIS_URL в os.environ для доступа из handlers
-        os.environ["REDIS_URL"] = REDIS_URL
-        logging.info("✅ REDIS_URL установлен для handlers")
+        redis_client = aioredis.from_url(REDIS_URL)
+        dp["redis_client"] = redis_client
+        logging.info("✅ Redis client инициализирован и добавлен в Dispatcher")
+    else:
+        # Это нужно, чтобы приложение не упало, если REDIS_URL отсутствует
+        dp["redis_client"] = None
+        logging.warning("⚠️ REDIS_URL не установлен - воркер не будет получать задачи!")
 
     commands = [
         BotCommand(command="/start", description="▶️ Запустить бота"),
