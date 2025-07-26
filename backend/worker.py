@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import sys
 import boto3
 import io
 import time
@@ -22,6 +23,75 @@ from telethon.sessions import StringSession
 from PIL import Image
 from html import escape
 from markdown_it import MarkdownIt
+
+print("🔄 WORKER.PY ЗАГРУЖАЕТСЯ...")
+print(f"Python version: {sys.version}")
+
+try:
+    # Загрузка переменных окружения
+    print("📋 Загружаю переменные окружения...")
+    load_dotenv()
+    
+    # Проверка критических переменных
+    print("🔍 Проверяю переменные окружения:")
+    
+    API_ID_STR = os.getenv("API_ID")
+    API_HASH = os.getenv("API_HASH") 
+    SESSION_STRING = os.getenv("TELETHON_SESSION")
+    REDIS_URL = os.getenv("REDIS_URL") or os.getenv("REDIS_PUBLIC_URL")
+    
+    print(f"  API_ID: {'✅' if API_ID_STR else '❌'}")
+    print(f"  API_HASH: {'✅' if API_HASH else '❌'}")
+    print(f"  SESSION_STRING: {'✅' if SESSION_STRING else '❌'}")
+    print(f"  REDIS_URL: {'✅' if REDIS_URL else '❌'}")
+    
+    # Парсинг API_ID
+    try:
+        API_ID = int(API_ID_STR) if API_ID_STR else None
+        print(f"  API_ID parsed: {'✅' if API_ID else '❌'}")
+    except Exception as e:
+        print(f"  ❌ API_ID parse error: {e}")
+        API_ID = None
+    
+    print("🔧 Инициализирую компоненты...")
+    
+    # Инициализация компонентов
+    try:
+        client = TelegramClient(StringSession(SESSION_STRING or ""), API_ID, API_HASH) if (SESSION_STRING and API_ID is not None and API_HASH) else None
+        print(f"  Telethon client: {'✅' if client else '❌'}")
+    except Exception as e:
+        print(f"  ❌ Telethon client error: {e}")
+        client = None
+
+    # Move RedisPublisher definition above this block
+    class RedisPublisher: # type: ignore
+        def __init__(self, redis_url: str):
+            self.redis_url, self._pool, self._lock = redis_url, None, asyncio.Lock()
+        async def get_connection(self):
+            if self._pool is None:
+                async with self._lock:
+                    if self._pool is None: self._pool = aioredis.ConnectionPool.from_url(self.redis_url, max_connections=20, retry_on_timeout=True)
+            return aioredis.Redis(connection_pool=self._pool)
+        async def publish(self, channel: str, message: str):
+            try: await (await self.get_connection()).publish(channel, message)
+            except Exception as e: logging.error(f"Redis publish error: {e}")
+        async def close(self):
+            if self._pool: await self._pool.disconnect()
+
+    try:
+        redis_publisher = RedisPublisher(REDIS_URL) if REDIS_URL else None
+        print(f"  Redis publisher: {'✅' if redis_publisher else '❌'}")
+    except Exception as e:
+        print(f"  ❌ Redis publisher error: {e}")
+        redis_publisher = None
+    
+    print("✅ worker.py успешно загружен!")
+    
+except Exception as e:
+    print(f"💥 КРИТИЧЕСКАЯ ОШИБКА ПРИ ЗАГРУЗКЕ worker.py: {e}")
+    import traceback
+    traceback.print_exc()
+    exit(1)
 
 # --- НАСТРОЙКА ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
