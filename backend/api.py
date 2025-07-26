@@ -18,7 +18,7 @@ from database import schemas
 from database.engine import create_db, session_maker
 from database.models import Post, Subscription # Убедимся, что Subscription импортирована
 from database.schemas import PostInFeed
-from worker import backfill_user_channels
+# from worker import backfill_user_channels
 
 from fastapi_cache import FastAPICache
 from fastapi_cache.backends.redis import RedisBackend

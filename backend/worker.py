@@ -249,45 +249,111 @@ async def periodic_tasks_runner():
         try: await asyncio.wait_for(shutdown_event.wait(), timeout=SLEEP_TIME)
         except asyncio.TimeoutError: pass
 async def listen_for_new_channel_tasks():
-    if not redis_publisher: return
-    logging.info("Воркер слушает задачи на добавление каналов...")
-    redis_client = await redis_publisher.get_connection()
+    if not redis_publisher: 
+        logging.warning("❌ Redis publisher не настроен - новые каналы не будут обрабатываться автоматически!")
+        logging.warning(f"❌ REDIS_URL = {REDIS_URL}")  # ДОБАВИТЬ для диагностики
+        return
+    
+    logging.info("🔄 Воркер слушает задачи на добавление каналов...")
+    
+    try:
+        redis_client = await redis_publisher.get_connection()
+        logging.info("✅ Redis подключение установлено для слушания задач")
+    except Exception as e:
+        logging.error(f"❌ Ошибка подключения к Redis: {e}")
+        return
+    
     while not shutdown_event.is_set():
         try:
+            logging.debug("⏳ Ожидание задач из Redis...")  # Для отладки
+            
             task_raw = await redis_client.brpop("new_channel_tasks", timeout=1)
-            if not task_raw: continue
+            
+            if not task_raw: 
+                continue
+                
+            logging.info(f"📨 Получены raw данные из Redis: {task_raw}")  # ДОБАВИТЬ
+            
             task = json.loads(task_raw[1])
-            channel_id, chat_id, title = int(task.get("channel_id")), int(task.get("user_chat_id")), task.get("channel_title")
-            logging.info(f"Получена задача на обработку канала ID {channel_id}")
+            channel_id = int(task.get("channel_id"))
+            chat_id = int(task.get("user_chat_id"))
+            title = task.get("channel_title")
+            
+            logging.info(f"🆕 НОВЫЙ КАНАЛ: Обрабатываю канал «{title}» (ID: {channel_id}) для пользователя {chat_id}")
+            
             async with session_maker() as session:
                 channel = await session.get(Channel, channel_id)
                 if channel:
+                    logging.info(f"📥 Начинаю загрузку постов из «{title}»...")
+                    
                     entity = await get_cached_entity(channel)
                     if entity:
+                        logging.info(f"🖼️ Загружаю аватар для «{title}»...")
                         avatar_url = await upload_avatar_to_s3(client, entity)
-                        if avatar_url: channel.avatar_url = avatar_url; session.add(channel); await session.commit()
+                        if avatar_url: 
+                            channel.avatar_url = avatar_url
+                            session.add(channel)
+                            await session.commit()
+                            logging.info(f"✅ Аватар загружен для «{title}»")
+                    
                     await fetch_posts_for_channel(channel, session, POST_LIMIT)
+                    
+                    # ОТПРАВКА УВЕДОМЛЕНИЯ
                     completion = {"user_chat_id": chat_id, "channel_title": title}
                     await redis_publisher.publish("task_completion_notifications", json.dumps(completion))
-        except asyncio.CancelledError: logging.info("Redis listener получил сигнал отмены"); raise
-        except asyncio.TimeoutError: continue
+                    logging.info(f"🎉 Канал «{title}» обработан, уведомление отправлено пользователю {chat_id}")
+                else:
+                    logging.error(f"❌ Канал с ID {channel_id} не найден в базе данных!")
+                    
+        except asyncio.CancelledError: 
+            logging.info("🛑 Redis listener получил сигнал отмены")
+            raise
+        except asyncio.TimeoutError: 
+            continue
+        except json.JSONDecodeError as e:
+            logging.error(f"❌ Ошибка декодирования JSON: {e}")
         except Exception as e:
-            logging.error(f"Ошибка в Redis-слушателе: {e}", exc_info=True)
-            await worker_stats.increment_errors(); await asyncio.sleep(1)
+            logging.error(f"❌ Ошибка в Redis-слушателе: {e}", exc_info=True)
+            await worker_stats.increment_errors()
+            await asyncio.sleep(1)
+    
+    logging.info("🛑 Redis listener завершен")
+
 async def main():
-    signal.signal(signal.SIGTERM, signal_handler); signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+    
     await create_db()
     logging.info("Воркер запущен.")
-    if not client: logging.critical("Telethon клиент не настроен!"); return
-    async with client:
-        logging.info("Клиент Telethon успешно запущен.")
-        await asyncio.gather(periodic_tasks_runner(), listen_for_new_channel_tasks())
-    if redis_publisher: await redis_publisher.close()
-    logging.info("Воркер корректно завершил работу.")
-
-if __name__ == "__main__":
-    if any(v is None for v in [API_ID_STR, API_HASH, SESSION_STRING]):
-        logging.error("Не заданы переменные окружения для Telethon. Воркер не может запуститься.")
+    
+    if not client: 
+        logging.critical("❌ Telethon клиент не настроен!")
+        return
+    
+    # ДОБАВИТЬ: Проверка Redis
+    if not redis_publisher:
+        logging.warning("⚠️ Redis не настроен - новые каналы не будут обрабатываться автоматически")
+        logging.warning(f"⚠️ REDIS_URL = {os.getenv('REDIS_URL')}")
     else:
-        try: asyncio.run(main())
-        except (KeyboardInterrupt, SystemExit): logging.info("Приложение остановлено.")
+        logging.info("✅ Redis настроен корректно")
+    
+    async with client:
+        logging.info("✅ Клиент Telethon успешно запущен.")
+        
+        # Запускаем задачи
+        tasks = [
+            asyncio.create_task(periodic_tasks_runner(), name="periodic_tasks"),
+        ]
+        
+        if redis_publisher:
+            tasks.append(asyncio.create_task(listen_for_new_channel_tasks(), name="redis_listener"))
+            logging.info("🔄 Запускаю Redis listener...")
+        else:
+            logging.warning("⚠️ Redis listener НЕ запущен - новые каналы обрабатываться не будут")
+        
+        await asyncio.gather(*tasks)
+    
+    if redis_publisher: 
+        await redis_publisher.close()
+    
+    logging.info("✅ Воркер корректно завершил работу.")
