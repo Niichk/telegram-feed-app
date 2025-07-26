@@ -2,6 +2,7 @@ import asyncio
 import logging
 import json
 import os
+from typing import Any, Dict  # ДОБАВИТЬ
 from collections import defaultdict
 from aiogram import F, Router, types
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,7 +35,7 @@ async def handle_forwarded_message(message: types.Message, session: AsyncSession
 
     if new_channel and redis_client:
         try:
-            task = {
+            task: Dict[str, Any] = {  # ДОБАВИТЬ type hint
                 "user_chat_id": str(message.chat.id),
                 "channel_id": str(new_channel.id),
                 "channel_title": new_channel.title,
@@ -42,7 +43,9 @@ async def handle_forwarded_message(message: types.Message, session: AsyncSession
             
             logging.info(f"📤 Отправляю задачу в Redis: {task}")
             
-            await redis_client.lpush("new_channel_tasks", json.dumps(task))
+            # ИСПРАВЛЕНИЕ: Явно указываем тип для json.dumps
+            task_json: str = json.dumps(task)
+            await redis_client.lpush("new_channel_tasks", json.dumps(task))  # type: ignore[misc]
             
             logging.info(f"✅ Задача успешно отправлена в Redis для канала {new_channel.title}")
             

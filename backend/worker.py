@@ -38,7 +38,7 @@ POST_LIMIT, SLEEP_TIME = 20, 300
 md_parser = MarkdownIt('commonmark', {'breaks': True, 'html': False, 'linkify': True})
 shutdown_event = asyncio.Event()
 
-client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH) if all([SESSION_STRING, API_ID, API_HASH]) else None
+client = TelegramClient(StringSession(SESSION_STRING or ""), API_ID, API_HASH) if (SESSION_STRING and API_ID is not None and API_HASH) else None
 s3_client = boto3.client('s3', aws_access_key_id=AWS_ACCESS_KEY_ID, aws_secret_access_key=AWS_SECRET_ACCESS_KEY, region_name=S3_REGION)
 
 # --- THREAD-SAFE КЛАССЫ (ИСПРАВЛЕНО) ---
@@ -121,6 +121,9 @@ def process_text(text: str | None) -> str | None:
     except Exception: return escape(text or "").replace('\n', '<br>')
 async def get_cached_entity(channel: Channel):
     async def fetcher():
+        if client is None:
+            logging.error("Telethon client is not initialized.")
+            return None
         entity = await client.get_entity(channel.username or int(channel.id))
         return entity[0] if isinstance(entity, list) else entity
     return await entity_cache.get_entity(str(channel.id), fetcher)
@@ -136,48 +139,148 @@ async def upload_avatar_to_s3(telethon_client: TelegramClient, channel_entity) -
 
 # --- ОСНОВНЫЕ ФУНКЦИИ ВОРКЕРА ---
 async def upload_media_to_s3(message: types.Message, channel_id: int) -> tuple[int, dict | None]:
+    # ДОБАВИТЬ: Проверка client
+    if client is None:
+        logging.error("Telethon client не инициализирован!")
+        return message.id, None
+        
     media_data, media_type = {}, None
-    if isinstance(message.media, types.MessageMediaDocument) and getattr(message.media.document, 'size', 0) > 60 * 1024 * 1024: return message.id, None
-    if isinstance(message.media, types.MessageMediaPhoto): media_type = 'photo'
-    elif isinstance(message.media, types.MessageMediaDocument):
-        mime = getattr(message.media.document, 'mime_type', '')
-        if mime.startswith('video/'): media_type = 'video'
-        elif mime in ['image/gif', 'video/mp4']: media_type = 'gif'
-    if not media_type: return message.id, None
+    
+    # ИСПРАВЛЕНИЕ: Безопасная проверка document
+    if isinstance(message.media, types.MessageMediaDocument):
+        document = message.media.document
+        if document and getattr(document, 'size', 0) > 60 * 1024 * 1024:
+            return message.id, None
+        
+        if isinstance(message.media, types.MessageMediaPhoto): 
+            media_type = 'photo'
+        elif isinstance(message.media, types.MessageMediaDocument):
+            mime = getattr(document, 'mime_type', '') if document else ''
+            if mime.startswith('video/'): 
+                media_type = 'video'
+            elif mime in ['image/gif', 'video/mp4']: 
+                media_type = 'gif'
+    elif isinstance(message.media, types.MessageMediaPhoto):
+        media_type = 'photo'
+        
+    if not media_type: 
+        return message.id, None
+        
     try:
         async with s3_semaphore:
-            ext = '.webp' if media_type == 'photo' else '.gif' if media_type == 'gif' else os.path.splitext(next((a.file_name for a in getattr(message.media.document, 'attributes', []) if hasattr(a, 'file_name')), ''))[1] or '.dat'
-            content_type = 'image/webp' if media_type == 'photo' else 'image/gif' if media_type == 'gif' else getattr(message.media.document, 'mime_type', 'application/octet-stream')
+            # ИСПРАВЛЕНИЕ: Безопасное получение расширения
+            if media_type == 'photo':
+                ext = '.webp'
+                content_type = 'image/webp'
+            elif media_type == 'gif':
+                ext = '.gif'
+                content_type = 'image/gif'
+            else:  # video
+                # Безопасное получение расширения для видео
+                ext = '.dat'  # По умолчанию
+                content_type = 'application/octet-stream'
+                
+                if isinstance(message.media, types.MessageMediaDocument) and message.media.document:
+                    document = message.media.document
+                    content_type = getattr(document, 'mime_type', 'application/octet-stream')
+                    
+                    # Попытка получить расширение из атрибутов
+                    attributes = getattr(document, 'attributes', [])
+                    for attr in attributes:
+                        if hasattr(attr, 'file_name') and attr.file_name:
+                            file_ext = os.path.splitext(attr.file_name)[1]
+                            if file_ext:
+                                ext = file_ext
+                                break
+            
             key = f"media/{channel_id}/{message.id}{ext}"
             mem_file = io.BytesIO()
+            
             await client.download_media(message, file=mem_file)
             mem_file.seek(0)
+            
             if media_type == 'photo':
-                with Image.open(mem_file) as im: im = im.convert("RGB"); buf = io.BytesIO(); im.save(buf, format="WEBP", quality=80); buf.seek(0); mem_file = buf
+                with Image.open(mem_file) as im: 
+                    im = im.convert("RGB")
+                    buf = io.BytesIO()
+                    im.save(buf, format="WEBP", quality=80)
+                    buf.seek(0)
+                    mem_file = buf
+                    
             s3_client.upload_fileobj(mem_file, S3_BUCKET_NAME, key, ExtraArgs={'ContentType': content_type})
-            media_data["type"], media_data["url"] = media_type, f"https://{S3_BUCKET_NAME}.s3.{S3_REGION}.amazonaws.com/{key}"
+            media_data["type"] = media_type
+            media_data["url"] = f"https://{S3_BUCKET_NAME}.s3.{S3_REGION}.amazonaws.com/{key}"
+            
+            # ✅ ИСПРАВЛЕНИЕ: Безопасная обработка thumbnail для видео
+            if media_type == 'video' and isinstance(message.media, types.MessageMediaDocument):
+                document = message.media.document
+                if document and hasattr(document, 'thumbs') and document.thumbs: # type: ignore
+                    try:
+                        thumb_key = f"media/{channel_id}/{message.id}_thumb.webp"
+                        thumb_in_memory = io.BytesIO()
+                        
+                        # Скачиваем thumbnail (последний = лучшее качество)
+                        await client.download_media(message, thumb=-1, file=thumb_in_memory)
+                        thumb_in_memory.seek(0)
+                        
+                        if thumb_in_memory.getbuffer().nbytes > 0:
+                            # Конвертируем в WebP
+                            with Image.open(thumb_in_memory) as im:
+                                im = im.convert("RGB")
+                                output_buffer = io.BytesIO()
+                                im.save(output_buffer, format="WEBP", quality=75)
+                                output_buffer.seek(0)
+                                
+                            # Загружаем thumbnail в S3
+                            s3_client.upload_fileobj(
+                                output_buffer, 
+                                S3_BUCKET_NAME, 
+                                thumb_key, 
+                                ExtraArgs={'ContentType': 'image/webp'}
+                            )
+                            
+                            media_data["thumbnail_url"] = f"https://{S3_BUCKET_NAME}.s3.{S3_REGION}.amazonaws.com/{thumb_key}"
+                            logging.debug(f"✅ Thumbnail загружен для видео {message.id}")
+                        
+                    except Exception as thumb_error:
+                        logging.warning(f"⚠️ Не удалось загрузить thumbnail для видео {message.id}: {thumb_error}")
+                        # Продолжаем без thumbnail
+            
         return message.id, media_data
+        
     except Exception as e:
         logging.error(f"Ошибка загрузки медиа для поста {message.id}: {e}", exc_info=True)
         return message.id, None
-async def create_post_dict(message: types.Message, channel_id: int) -> dict:
-    # Обработка реакций (существующий код)
-    reactions = [{'count': r.count, 'emoticon': getattr(r.reaction, 'emoticon', None), 'document_id': getattr(r.reaction, 'document_id', None)} for r in (message.reactions.results if message.reactions else []) if r.count > 0]
     
-    # ДОБАВИТЬ: Обработка forwarded_from
+async def create_post_dict(message: types.Message, channel_id: int) -> dict:
+    # Обработка реакций
+    reactions = [
+        {
+            'count': r.count, 
+            'emoticon': getattr(r.reaction, 'emoticon', None), 
+            'document_id': getattr(r.reaction, 'document_id', None)
+        } 
+        for r in (message.reactions.results if message.reactions else []) 
+        if r.count > 0
+    ]
+    
+    # Обработка forwarded_from
     forward_data = None
     if message.fwd_from:
         try:
             if hasattr(message.fwd_from, 'from_id') and message.fwd_from.from_id:
-                source_entity = await client.get_entity(message.fwd_from.from_id)
-                from_name = getattr(source_entity, 'title', getattr(source_entity, 'first_name', 'Неизвестный источник'))
-                username = getattr(source_entity, 'username', None)
-                raw_channel_id = getattr(source_entity, 'id', None)
-                channel_id_str = (
-                    str(raw_channel_id)[4:] if raw_channel_id and str(raw_channel_id).startswith('-100') 
-                    else str(raw_channel_id) if raw_channel_id else None
-                )
-                forward_data = {"from_name": from_name, "username": username, "channel_id": channel_id_str}
+                if client is not None:
+                    source_entity = await client.get_entity(message.fwd_from.from_id)
+                    from_name = getattr(source_entity, 'title', getattr(source_entity, 'first_name', 'Неизвестный источник'))
+                    username = getattr(source_entity, 'username', None)
+                    raw_channel_id = getattr(source_entity, 'id', None)
+                    channel_id_str = (
+                        str(raw_channel_id)[4:] if raw_channel_id and str(raw_channel_id).startswith('-100') 
+                        else str(raw_channel_id) if raw_channel_id else None
+                    )
+                    forward_data = {"from_name": from_name, "username": username, "channel_id": channel_id_str}
+                else:
+                    forward_data = {"from_name": "Недоступный источник", "username": None, "channel_id": None}
             elif hasattr(message.fwd_from, 'from_name'):
                 forward_data = {"from_name": message.fwd_from.from_name, "username": None, "channel_id": None}
         except Exception as e:
@@ -188,21 +291,34 @@ async def create_post_dict(message: types.Message, channel_id: int) -> dict:
         "channel_id": channel_id,
         "message_id": message.id,
         "date": message.date,
-        "text": process_text(message.text),
-        "grouped_id": message.grouped_id,  # ✅ ДОБАВИТЬ
-        "views": message.views or 0,
+        "text": process_text(getattr(message, 'text', None)),  # ✅ ИСПРАВЛЕНИЕ: Безопасное получение text
+        "grouped_id": getattr(message, 'grouped_id', None),  # ✅ ИСПРАВЛЕНИЕ: Безопасное получение grouped_id
+        "views": getattr(message, 'views', 0) or 0,  # ✅ ИСПРАВЛЕНИЕ: Безопасное получение views
         "reactions": reactions,
-        "forwarded_from": forward_data,  # ✅ ДОБАВИТЬ
+        "forwarded_from": forward_data,
         "media": []
     }
 
 async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, post_limit: int):
     try:
+        if client is None:  # ✅ ДОБАВИТЬ проверку client
+            logging.error("Telethon client не инициализирован!")
+            return
+            
         entity = await get_cached_entity(channel)
-        if not entity: return
-        messages = [msg async for msg in client.iter_messages(entity, limit=post_limit) if msg and (msg.text or msg.media)]
+        if not entity: 
+            return
+            
+        # ✅ ИСПРАВЛЕНИЕ: Безопасная проверка text и media
+        messages = [
+            msg async for msg in client.iter_messages(entity, limit=post_limit) 
+            if msg and (getattr(msg, 'text', None) or getattr(msg, 'media', None))
+        ]
+        
         if not messages:
-            logging.info(f"Нет новых постов для «{channel.title}»"); return
+            logging.info(f"Нет новых постов для «{channel.title}»")
+            return
+            
         posts_data = [await create_post_dict(msg, channel.id) for msg in messages]
         stmt = insert(Post).values(posts_data).on_conflict_do_nothing(index_elements=['channel_id', 'message_id']).returning(Post.message_id)
         result = await db_session.execute(stmt)
@@ -210,8 +326,14 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
         await db_session.commit()
         logging.info(f"Для «{channel.title}» проверено {len(messages)} постов. Найдено новых: {len(new_message_ids)}")
         await worker_stats.increment_posts(len(new_message_ids))
+        
         if new_message_ids:
-            new_messages_with_media = [msg for msg in messages if msg.id in new_message_ids and msg.media]
+            # ✅ ИСПРАВЛЕНИЕ: Безопасная проверка media
+            new_messages_with_media = [
+                msg for msg in messages 
+                if msg.id in new_message_ids and getattr(msg, 'media', None)
+            ]
+            
             if new_messages_with_media:
                 logging.info(f"Для «{channel.title}» запускаю загрузку {len(new_messages_with_media)} медиафайлов...")
                 for msg in new_messages_with_media:
@@ -230,9 +352,12 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
                     except Exception as e:
                         logging.error(f"Ошибка загрузки медиа для поста {msg.id}: {e}")
                         continue
+                        
     except Exception as e:
         logging.error(f"Критическая ошибка при обработке «{channel.title}»: {e}", exc_info=True)
-        await worker_stats.increment_errors(); await db_session.rollback()
+        await worker_stats.increment_errors()
+        await db_session.rollback()
+
 async def process_channel_safely(channel: Channel, semaphore: asyncio.Semaphore):
     async with semaphore, session_maker() as session:
         await fetch_posts_for_channel(channel, session, POST_LIMIT)
@@ -248,6 +373,7 @@ async def periodic_tasks_runner():
         logging.info("Периодический сбор завершен.")
         try: await asyncio.wait_for(shutdown_event.wait(), timeout=SLEEP_TIME)
         except asyncio.TimeoutError: pass
+        
 async def listen_for_new_channel_tasks():
     if not redis_publisher: 
         logging.warning("❌ Redis publisher не настроен - новые каналы не будут обрабатываться автоматически!")
@@ -267,7 +393,7 @@ async def listen_for_new_channel_tasks():
         try:
             logging.debug("⏳ Ожидание задач из Redis...")  # Для отладки
             
-            task_raw = await redis_client.brpop("new_channel_tasks", timeout=1)
+            task_raw = await redis_client.brpop("new_channel_tasks", timeout=1) # type: ignore
             
             if not task_raw: 
                 continue
@@ -287,7 +413,7 @@ async def listen_for_new_channel_tasks():
                     logging.info(f"📥 Начинаю загрузку постов из «{title}»...")
                     
                     entity = await get_cached_entity(channel)
-                    if entity:
+                    if entity and client is not None:
                         logging.info(f"🖼️ Загружаю аватар для «{title}»...")
                         avatar_url = await upload_avatar_to_s3(client, entity)
                         if avatar_url: 
