@@ -63,7 +63,6 @@ try:
         print(f"  ❌ Telethon client error: {e}")
         client = None
 
-    # Move RedisPublisher definition above this block
     class RedisPublisher: # type: ignore
         def __init__(self, redis_url: str):
             self.redis_url, self._pool, self._lock = redis_url, None, asyncio.Lock()
@@ -553,3 +552,17 @@ async def main():
         await redis_publisher.close()
     
     logging.info("✅ Воркер корректно завершил работу.")
+
+# ✅ ДОБАВИТЬ ТОЧКУ ВХОДА:
+if __name__ == "__main__":
+    print("🚀 Запускаю main()...")
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("🛑 Воркер остановлен пользователем")
+    except Exception as e:
+        print(f"💥 ФАТАЛЬНАЯ ОШИБКА в main(): {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        print("🏁 Воркер завершил работу")
