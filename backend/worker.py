@@ -370,58 +370,82 @@ async def create_post_dict(message: types.Message, channel_id: int) -> dict:
 
 async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, post_limit: int):
     try:
-        if client is None:  # ✅ ДОБАВИТЬ проверку client
+        if client is None:
             logging.error("Telethon client не инициализирован!")
             return
-            
+
         entity = await get_cached_entity(channel)
         if not entity: 
             return
-            
-        # ✅ ИСПРАВЛЕНИЕ: Безопасная проверка text и media
+
+        # Шаг 1: Получаем последние сообщения
         messages = [
             msg async for msg in client.iter_messages(entity, limit=post_limit) 
             if msg and (getattr(msg, 'text', None) or getattr(msg, 'media', None))
         ]
-        
+
         if not messages:
             logging.info(f"Нет новых постов для «{channel.title}»")
             return
-            
-        posts_data = [await create_post_dict(msg, channel.id) for msg in messages]
-        stmt = insert(Post).values(posts_data).on_conflict_do_nothing(index_elements=['channel_id', 'message_id']).returning(Post.message_id)
+
+        # Шаг 2: Группируем сообщения по ID альбома (grouped_id)
+        grouped_messages = defaultdict(list)
+        for msg in messages:
+            # Если у сообщения есть grouped_id, используем его как ключ. Иначе — ID самого сообщения.
+            key = msg.grouped_id or msg.id 
+            grouped_messages[key].append(msg)
+
+        # Шаг 3: Обрабатываем каждую группу (пост или альбом)
+        posts_to_insert = []
+        for group_id, message_group in grouped_messages.items():
+            # В группе сообщений с медиа, текст обычно прикреплен к первому
+            message_group.sort(key=lambda m: m.id)
+            main_message = message_group[0]
+
+            # Создаем "скелет" поста из главного сообщения
+            post_data = await create_post_dict(main_message, channel.id)
+
+            # Собираем медиа со ВСЕХ сообщений в группе
+            media_list = []
+            media_upload_tasks = []
+
+            for msg_in_group in message_group:
+                if getattr(msg_in_group, 'media', None):
+                    media_upload_tasks.append(upload_media_to_s3(msg_in_group, channel.id))
+
+            # Выполняем все задачи по загрузке медиа параллельно для скорости
+            media_results = await asyncio.gather(*media_upload_tasks)
+
+            # Собираем успешные результаты загрузки
+            for _, media_item in media_results: # _ это message_id, он нам тут не нужен
+                if media_item:
+                    media_list.append(media_item)
+
+            # Если у поста нет ни текста, ни медиа, пропускаем его
+            if not media_list and not post_data.get('text'):
+                continue
+
+            # Добавляем весь список медиа в наш "скелет" поста
+            post_data['media'] = media_list
+            posts_to_insert.append(post_data)
+
+        if not posts_to_insert:
+            logging.info(f"Для «{channel.title}» не найдено постов для вставки после группировки.")
+            return
+
+        # Шаг 4: Вставляем в БД уже сгруппированные посты
+        stmt = insert(Post).values(posts_to_insert).on_conflict_do_nothing(
+            index_elements=['channel_id', 'message_id']
+        ).returning(Post.id) # Используем .id для подсчета
+
         result = await db_session.execute(stmt)
-        new_message_ids = {row[0] for row in result.fetchall()}
+        new_items_count = len(result.fetchall())
         await db_session.commit()
-        logging.info(f"Для «{channel.title}» проверено {len(messages)} постов. Найдено новых: {len(new_message_ids)}")
-        await worker_stats.increment_posts(len(new_message_ids))
-        
-        if new_message_ids:
-            # ✅ ИСПРАВЛЕНИЕ: Безопасная проверка media
-            new_messages_with_media = [
-                msg for msg in messages 
-                if msg.id in new_message_ids and getattr(msg, 'media', None)
-            ]
-            
-            if new_messages_with_media:
-                logging.info(f"Для «{channel.title}» запускаю загрузку {len(new_messages_with_media)} медиафайлов...")
-                for msg in new_messages_with_media:
-                    try:
-                        # Создаем отдельную сессию для каждого медиафайла
-                        async with session_maker() as media_session:
-                            msg_id, media_data = await upload_media_to_s3(msg, channel.id)
-                            if media_data:
-                                update_stmt = update(Post).where(
-                                    Post.channel_id == channel.id, 
-                                    Post.message_id == msg_id
-                                ).values(media=[media_data])
-                                await media_session.execute(update_stmt)
-                                await media_session.commit()
-                                logging.debug(f"Медиа загружено для поста {msg_id}")
-                    except Exception as e:
-                        logging.error(f"Ошибка загрузки медиа для поста {msg.id}: {e}")
-                        continue
-                        
+
+        logging.info(f"Для «{channel.title}» обработано {len(grouped_messages)} постов/групп. Найдено новых: {new_items_count}")
+        if new_items_count > 0:
+            await worker_stats.increment_posts(new_items_count)
+
     except Exception as e:
         logging.error(f"Критическая ошибка при обработке «{channel.title}»: {e}", exc_info=True)
         await worker_stats.increment_errors()
@@ -430,6 +454,7 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
 async def process_channel_safely(channel: Channel, semaphore: asyncio.Semaphore):
     async with semaphore, session_maker() as session:
         await fetch_posts_for_channel(channel, session, POST_LIMIT)
+
 async def periodic_tasks_runner():
     while not shutdown_event.is_set():
         logging.info("Начинаю периодический сбор постов...")
