@@ -16,6 +16,19 @@ user_locks = defaultdict(lambda: None)
 async def handle_forwarded_message(message: types.Message, session: AsyncSession, redis_client: aioredis.Redis):
     if not message.from_user or not message.forward_from_chat or message.forward_from_chat.type != 'channel':
         return await message.reply("Пожалуйста, перешлите сообщение из публичного канала.")
+    
+    if message.media_group_id:
+        # Создаем уникальный ключ для Redis
+        cache_key = f"media_group_processed:{message.media_group_id}"
+        
+        # Проверяем, не обрабатывали ли мы уже эту группу
+        is_processed = await redis_client.get(cache_key)
+        if is_processed:
+            logging.info(f"Игнорируем дубликат из медиа-группы {message.media_group_id}")
+            return  # Просто выходим, ничего не делая
+
+        # Если это первое сообщение из группы, ставим флаг в Redis на 10 секунд
+        await redis_client.set(cache_key, "1", ex=10)
 
     user_lock = user_locks[message.from_user.id]
     if user_lock is None:
@@ -57,4 +70,4 @@ async def handle_forwarded_message(message: types.Message, session: AsyncSession
         if not new_channel:
             logging.info(f"ℹ️ Канал уже существует, задача в Redis не отправляется")
         if not redis_client:
-            logging.error(f"❌ Redis client не инициализирован! REDIS_URL = {REDIS_URL}")
+            logging.error(f"❌ Redis client не инициализирован!")
