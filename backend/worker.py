@@ -16,6 +16,7 @@ from telethon.errors import ChannelPrivateError, FloodWaitError
 from sqlalchemy import select, distinct, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert
+from collections import defaultdict
 
 from database.engine import session_maker, create_db
 from database.models import Channel, Post, BackfillRequest, Subscription
