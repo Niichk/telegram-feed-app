@@ -12,7 +12,7 @@ from database.requests import add_subscription
 
 router = Router()
 user_locks = defaultdict(asyncio.Lock)
-REDIS_URL = os.getenv("REDIS_URL")
+REDIS_URL = os.getenv("REDIS_URL") or os.getenv("REDIS_PUBLIC_URL")
 redis_client = aioredis.from_url(REDIS_URL) if REDIS_URL else None
 
 @router.message(F.forward_from_chat)

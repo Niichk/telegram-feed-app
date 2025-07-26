@@ -31,7 +31,7 @@ load_dotenv()
 API_ID_STR, API_HASH, SESSION_STRING = os.getenv("API_ID"), os.getenv("API_HASH"), os.getenv("TELETHON_SESSION")
 S3_BUCKET_NAME, S3_REGION = os.getenv("S3_BUCKET_NAME"), os.getenv("S3_REGION")
 AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY_ID"), os.getenv("AWS_SECRET_ACCESS_KEY")
-REDIS_URL = os.getenv("REDIS_URL")
+REDIS_URL = os.getenv("REDIS_URL") or os.getenv("REDIS_PUBLIC_URL")
 API_ID = int(API_ID_STR) if API_ID_STR else None
 POST_LIMIT, SLEEP_TIME = 20, 300
 

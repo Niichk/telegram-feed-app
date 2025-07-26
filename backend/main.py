@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 async def listen_for_task_results(bot: Bot):
     """Слушает уведомления от воркера о завершенных задачах."""
-    REDIS_URL = os.getenv("REDIS_URL")
+    REDIS_URL = os.getenv("REDIS_URL") or os.getenv("REDIS_PUBLIC_URL")
     if not REDIS_URL:
         return
 

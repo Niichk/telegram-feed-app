@@ -36,7 +36,7 @@ load_dotenv()
 # --- КОНФИГУРАЦИЯ ---
 limiter = Limiter(key_func=lambda request: "global")
 BOT_TOKEN = os.getenv("API_TOKEN")
-REDIS_URL = os.getenv("REDIS_URL")
+REDIS_URL = os.getenv("REDIS_URL") or os.getenv("REDIS_PUBLIC_URL")
 FRONTEND_URL = os.getenv("FRONTEND_URL")
 IS_DEVELOPMENT = os.getenv("ENVIRONMENT") == "development"
 PAGE_SIZE = 20
