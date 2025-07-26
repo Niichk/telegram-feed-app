@@ -202,10 +202,12 @@ async def upload_avatar_to_s3(telethon_client: TelegramClient, channel_entity) -
         file_key, file_in_memory = f"avatars/{channel_entity.id}.jpg", io.BytesIO()
         await telethon_client.download_profile_photo(channel_entity, file=file_in_memory)
         if file_in_memory.getbuffer().nbytes == 0: return None
-        file_in_memory.seek(0); s3_client.upload_fileobj(file_in_memory, S3_BUCKET_NAME, file_key, ExtraArgs={'ContentType': 'image/jpeg'})
+        file_in_memory.seek(0)
+        s3_client.upload_fileobj(file_in_memory, S3_BUCKET_NAME, file_key, ExtraArgs={'ContentType': 'image/jpeg', 'ACL': 'public-read'})
         return f"https://{S3_BUCKET_NAME}.s3.{S3_REGION}.amazonaws.com/{file_key}"
     except Exception as e:
-        await worker_stats.increment_errors(); return None
+        await worker_stats.increment_errors()
+        return None
 
 # --- ОСНОВНЫЕ ФУНКЦИИ ВОРКЕРА ---
 async def upload_media_to_s3(message: types.Message, channel_id: int) -> tuple[int, dict | None]:
@@ -277,7 +279,7 @@ async def upload_media_to_s3(message: types.Message, channel_id: int) -> tuple[i
                     buf.seek(0)
                     mem_file = buf
                     
-            s3_client.upload_fileobj(mem_file, S3_BUCKET_NAME, key, ExtraArgs={'ContentType': content_type})
+            s3_client.upload_fileobj(mem_file, S3_BUCKET_NAME, key, ExtraArgs={'ContentType': content_type, 'ACL': 'public-read'} )
             media_data["type"] = media_type
             media_data["url"] = f"https://{S3_BUCKET_NAME}.s3.{S3_REGION}.amazonaws.com/{key}"
             
@@ -306,7 +308,7 @@ async def upload_media_to_s3(message: types.Message, channel_id: int) -> tuple[i
                                 output_buffer, 
                                 S3_BUCKET_NAME, 
                                 thumb_key, 
-                                ExtraArgs={'ContentType': 'image/webp'}
+                                ExtraArgs={'ContentType': content_type, 'ACL': 'public-read'} 
                             )
                             
                             media_data["thumbnail_url"] = f"https://{S3_BUCKET_NAME}.s3.{S3_REGION}.amazonaws.com/{thumb_key}"
