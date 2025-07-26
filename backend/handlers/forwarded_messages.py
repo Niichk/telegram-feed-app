@@ -1,7 +1,7 @@
 import os
 import json
 import logging
-import aioredis
+import redis.asyncio as aioredis
 from typing import Any, Dict
 from collections import defaultdict
 from aiogram import Router, types, F
