@@ -35,17 +35,16 @@ async def handle_forwarded_message(message: types.Message, session: AsyncSession
 
     if new_channel and redis_client:
         try:
-            task: Dict[str, Any] = {  # ДОБАВИТЬ type hint
-                "user_chat_id": str(message.chat.id),
+            task: Dict[str, Any] = {
+                "user_chat_id": str(message.from_user.id),  # ✅ ИСПРАВИТЬ: from_user.id вместо chat.id
                 "channel_id": str(new_channel.id),
                 "channel_title": new_channel.title,
             }
             
             logging.info(f"📤 Отправляю задачу в Redis: {task}")
             
-            # ИСПРАВЛЕНИЕ: Явно указываем тип для json.dumps
             task_json: str = json.dumps(task)
-            await redis_client.lpush("new_channel_tasks", json.dumps(task))  # type: ignore[misc]
+            await redis_client.lpush("new_channel_tasks", task_json) # type: ignore
             
             logging.info(f"✅ Задача успешно отправлена в Redis для канала {new_channel.title}")
             
