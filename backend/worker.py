@@ -217,52 +217,52 @@ async def upload_media_to_s3(message: types.Message, channel_id: int) -> tuple[i
     media_data, media_type = {}, None
     
     # ИСПРАВЛЕНИЕ: Безопасная проверка document
-    if isinstance(message.media, types.MessageMediaDocument):
-        document = message.media.document
-        if document and getattr(document, 'size', 0) > 60 * 1024 * 1024:
-            return message.id, None
-        
-        if isinstance(message.media, types.MessageMediaPhoto): 
-            media_type = 'photo'
-        elif isinstance(message.media, types.MessageMediaDocument):
-            mime = getattr(document, 'mime_type', '') if document else ''
-            if mime.startswith('video/'): 
-                media_type = 'video'
-            elif mime in ['image/gif', 'video/mp4']: 
-                media_type = 'gif'
-    elif isinstance(message.media, types.MessageMediaPhoto):
+    if isinstance(message.media, types.MessageMediaPhoto):
         media_type = 'photo'
-        
+    elif isinstance(message.media, types.MessageMediaDocument):
+        doc = message.media.document
+        if not doc:
+            return message.id, None
+        if getattr(doc, 'size', 0) > 60 * 1024 * 1024:
+            return message.id, None # Пропускаем файлы больше 60MB
+
+        mime_type = getattr(doc, 'mime_type', '').lower()
+        is_sticker = any(isinstance(attr, types.DocumentAttributeSticker) for attr in getattr(doc, 'attributes', []))
+
+        if is_sticker:
+            media_type = 'sticker'
+        elif mime_type.startswith('audio/'):
+            media_type = 'audio'
+        elif mime_type.startswith('video/'):
+            media_type = 'video'
+        elif mime_type == 'image/gif':
+            media_type = 'gif'
+
     if not media_type: 
         return message.id, None
         
     try:
         async with s3_semaphore:
-            # ИСПРАВЛЕНИЕ: Безопасное получение расширения
+            ext = '.dat'
+            content_type = 'application/octet-stream'
+
+            # Определяем расширение и тип контента
             if media_type == 'photo':
-                ext = '.webp'
-                content_type = 'image/webp'
+                ext, content_type = '.webp', 'image/webp'
             elif media_type == 'gif':
-                ext = '.gif'
-                content_type = 'image/gif'
-            else:  # video
-                # Безопасное получение расширения для видео
-                ext = '.dat'  # По умолчанию
-                content_type = 'application/octet-stream'
-                
-                if isinstance(message.media, types.MessageMediaDocument) and message.media.document:
-                    document = message.media.document
-                    content_type = getattr(document, 'mime_type', 'application/octet-stream')
-                    
-                    # Попытка получить расширение из атрибутов
-                    attributes = getattr(document, 'attributes', [])
-                    for attr in attributes:
-                        if hasattr(attr, 'file_name') and attr.file_name:
-                            file_ext = os.path.splitext(attr.file_name)[1]
-                            if file_ext:
-                                ext = file_ext
-                                break
-            
+                ext, content_type = '.gif', 'image/gif'
+            elif media_type == 'sticker':
+                ext, content_type = '.webp', 'image/webp'
+            elif media_type in ('video', 'audio'):
+                if message.media.document:
+                    doc = message.media.document
+                    content_type = getattr(doc, 'mime_type', content_type)
+                    file_name_attr = next((attr for attr in getattr(doc, 'attributes', []) if hasattr(attr, 'file_name')), None)
+                    if file_name_attr:
+                        file_ext = os.path.splitext(file_name_attr.file_name)[1]
+                        if file_ext:
+                            ext = file_ext
+
             key = f"media/{channel_id}/{message.id}{ext}"
             mem_file = io.BytesIO()
             

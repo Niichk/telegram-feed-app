@@ -21,7 +21,7 @@ class MediaItem(BaseModel):
 
     @validator('type')
     def validate_media_type(cls, v):
-        allowed_types = ['photo', 'video', 'audio']
+        allowed_types = ['photo', 'video', 'audio', 'sticker']
         if v not in allowed_types:
             raise ValueError(f'Media type must be one of {allowed_types}')
         return v

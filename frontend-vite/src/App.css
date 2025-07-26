@@ -524,3 +524,13 @@ body {
         .post-text s {
         text-decoration: line-through;
         }
+
+        .post-media-sticker {
+            padding: 0 16px 16px; /* Добавим отступы, чтобы стикер не прилипал к краям */
+        }
+
+        .sticker-visual {
+            max-width: 150px;
+            max-height: 150px;
+            height: auto;
+        }

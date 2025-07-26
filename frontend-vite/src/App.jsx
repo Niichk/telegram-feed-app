@@ -58,8 +58,9 @@ const PostMedia = React.memo(({ media }) => {
 
     const visualMedia = media.filter(item => item.type === 'photo' || item.type === 'video' || item.type === 'gif');
     const audioMedia = media.filter(item => item.type === 'audio');
+    const stickerMedia = media.filter(item => item.type === 'sticker');
 
-    if (visualMedia.length === 0 && audioMedia.length === 0) return null;
+    if (visualMedia.length === 0 && audioMedia.length === 0 && stickerMedia.length === 0) return null;
 
     const goToPrevious = () => setCurrentIndex(prev => (prev === 0 ? visualMedia.length - 1 : prev - 1));
     const goToNext = () => setCurrentIndex(prev => (prev === visualMedia.length - 1 ? 0 : prev + 1));
@@ -87,6 +88,19 @@ const PostMedia = React.memo(({ media }) => {
 
     return (
         <>
+                    {stickerMedia.length > 0 && (
+                        <div className="post-media-sticker">
+                            {stickerMedia.map((item, index) => (
+                                <img 
+                                    key={item.url || index}
+                                    src={item.url}
+                                    alt="Sticker"
+                                    className="sticker-visual"
+                                    loading="lazy"
+                                />
+                            ))}
+                        </div>
+                    )}
             {visualMedia.length > 0 && (
                 <div className="post-media-gallery">
                     {visualMedia.map((item, index) => (
@@ -126,27 +140,31 @@ const PostMedia = React.memo(({ media }) => {
                                         >
                                             <div className="video-play-button">▶️</div>
                                         </div>
+                                        
                                     )}
                                 </div>
                             )}
+                            
                         </div>
                     ))}
                     {visualMedia.length > 1 && (
-                        <>
-                            <button onClick={goToPrevious} className="slider-button prev">&lt;</button>
-                            <button onClick={goToNext} className="slider-button next">&gt;</button>
-                            <div className="slider-counter">{`${currentIndex + 1} / ${visualMedia.length}`}</div>
-                        </>
-                    )}
-                </div>
-            )}
-            {audioMedia.map((item, index) => (
-                <audio key={index} controls className="post-media-audio">
-                    <source src={item.url} />
-                </audio>
-            ))}
-        </>
-    );
+                    <>
+                        <button onClick={goToPrevious} className="slider-button prev">&lt;</button>
+                        <button onClick={goToNext} className="slider-button next">&gt;</button>
+                        <div className="slider-counter">{`${currentIndex + 1} / ${visualMedia.length}`}</div>
+                    </>
+                )}
+            </div>
+        )}
+
+        {audioMedia.map((item, index) => (
+            <audio key={item.url || index} controls className="post-media-audio" style={{width: '100%', marginTop: '12px'}}>
+                <source src={item.url} />
+                Ваш браузер не поддерживает аудио.
+            </audio>
+        ))}
+    </>
+);
 });
 
 
