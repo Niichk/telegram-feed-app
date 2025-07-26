@@ -15,6 +15,8 @@ from middlewares.db import DbSessionMiddleware
 
 load_dotenv()
 API_TOKEN = os.getenv("API_TOKEN")
+REDIS_URL = os.getenv("REDIS_URL") or os.getenv("REDIS_PUBLIC_URL")
+DATABASE_URL = os.getenv("DATABASE_URL")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 async def listen_for_task_results(bot: Bot):
@@ -51,12 +53,31 @@ async def listen_for_task_results(bot: Bot):
             await asyncio.sleep(1) # Небольшая пауза при ошибке
 
 async def main():
+    # Диагностика переменных окружения
+    logging.info("🚀 Запуск бота...")
+    logging.info(f"API_TOKEN: {'✅' if API_TOKEN else '❌'}")
+    logging.info(f"REDIS_URL: {'✅' if REDIS_URL else '❌'}")
+    logging.info(f"DATABASE_URL: {'✅' if DATABASE_URL else '❌'}")
+    
     if not API_TOKEN:
-        logging.critical("Критическая ошибка: API_TOKEN не установлен!")
-        sys.exit(1)
+        logging.error("❌ API_TOKEN не установлен!")
+        return
+    
+    if not REDIS_URL:
+        logging.warning("⚠️ REDIS_URL не установлен - воркер не будет получать задачи!")
+    
+    if not DATABASE_URL:
+        logging.error("❌ DATABASE_URL не установлен!")
+        return
 
     bot = Bot(token=API_TOKEN)
     dp = Dispatcher()
+    
+    # Инициализируем Redis в handlers
+    if REDIS_URL:
+        # Устанавливаем REDIS_URL в os.environ для доступа из handlers
+        os.environ["REDIS_URL"] = REDIS_URL
+        logging.info("✅ REDIS_URL установлен для handlers")
 
     commands = [
         BotCommand(command="/start", description="▶️ Запустить бота"),

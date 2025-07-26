@@ -4,6 +4,7 @@ from .engine import session_maker
 from sqlalchemy import select, and_
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
+import logging
 
 
 async def add_subscription(
@@ -14,6 +15,8 @@ async def add_subscription(
     channel_un: str
 ) -> tuple[str, Channel | None]:
 
+    logging.info(f"🔍 add_subscription вызвана: user_id={user_id}, channel_id={channel_id}, title={channel_title}")
+
     # Шаг 1: Ищем подписку
     sub_query = select(Subscription).where(
         Subscription.user_id == user_id,
@@ -21,25 +24,34 @@ async def add_subscription(
     )
     existing_subscription = (await session.execute(sub_query)).scalars().first()
 
-    # Шаг 2: Если подписка найдена, получаем объект канала и выходим.
     if existing_subscription:
         channel = await session.get(Channel, channel_id)
+        logging.info(f"ℹ️ Подписка уже существует для user_id={user_id}, channel_id={channel_id}")
         return f"Вы уже подписаны на канал «{channel.title if channel else ''}».", None
 
     # Шаг 3: Если подписки НЕТ, начинаем работу.
     user = await session.get(User, user_id)
     if not user:
-        # --- ИЗМЕНЕНО: Создаем пользователя только с ID ---
-        user = User(id=user_id)
+        logging.info(f"👤 Создаю нового пользователя: user_id={user_id}")
+        user = User(id=user_id, subscription_count=0)  # ✅ ИСПРАВЛЕНИЕ: Явно устанавливаем 0
         session.add(user)
+    else:
+        logging.info(f"👤 Пользователь найден: user_id={user_id}, subscription_count={user.subscription_count}")
+        
+        # ✅ ИСПРАВЛЕНИЕ: Защита от NULL значения
+        if user.subscription_count is None:
+            logging.warning(f"⚠️ subscription_count был NULL для user_id={user_id}, устанавливаю 0")
+            user.subscription_count = 0
 
-    # --- ДОБАВЛЕНО: Проверка лимита подписок ---
-    if user.subscription_count >= 10:
+    # ✅ ИСПРАВЛЕНИЕ: Безопасная проверка лимита
+    current_count = user.subscription_count or 0  # Защита от None
+    if current_count >= 10:
+        logging.warning(f"🚫 Превышен лимит подписок для user_id={user_id}: {current_count}")
         return "🚫 Превышен лимит в 10 подписок. Чтобы добавить новый канал, сначала отпишитесь от старого.", None
-    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
     
     channel = await session.get(Channel, channel_id)
     if not channel:
+        logging.info(f"📺 Создаю новый канал: channel_id={channel_id}, title={channel_title}")
         channel = Channel(id=channel_id, title=channel_title, username=channel_un)
         session.add(channel)
 
@@ -47,12 +59,13 @@ async def add_subscription(
     new_subscription = Subscription(user_id=user_id, channel_id=channel_id)
     session.add(new_subscription)
 
-    user.subscription_count += 1
+    user.subscription_count = current_count + 1
+    logging.info(f"✅ Увеличиваю счетчик подписок для user_id={user_id}: {user.subscription_count}")
 
     # Шаг 5: Сохраняем изменения.
     await session.commit()
+    logging.info(f"💾 Коммит выполнен для user_id={user_id}")
 
-    # Возвращаем сообщение и объект свежесозданного канала
     return f"✅ Канал «{channel_title}» успешно добавлен! Начинаю загрузку последних постов...", channel
 
 # Функция get_user_feed остается без изменений
@@ -95,11 +108,15 @@ async def delete_subscription(session: AsyncSession, user_id: int, channel_id: i
     existing_subscription = (await session.execute(sub_query)).scalars().first()
 
     if existing_subscription:
-        # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
         user = await session.get(User, user_id)
-        if user and user.subscription_count > 0:
-            user.subscription_count -= 1
-        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+        if user:
+            # ✅ ИСПРАВЛЕНИЕ: Защита от NULL значения
+            current_count = user.subscription_count or 0
+            if current_count > 0:
+                user.subscription_count = current_count - 1
+            else:
+                logging.warning(f"⚠️ subscription_count уже 0 для user_id={user_id}")
+                user.subscription_count = 0
 
         await session.delete(existing_subscription)
         await session.commit()
