@@ -18,17 +18,17 @@ async def handle_forwarded_message(message: types.Message, session: AsyncSession
         return await message.reply("Пожалуйста, перешлите сообщение из публичного канала.")
     
     if message.media_group_id:
-        # Создаем уникальный ключ для Redis
         cache_key = f"media_group_processed:{message.media_group_id}"
         
-        # Проверяем, не обрабатывали ли мы уже эту группу
-        is_processed = await redis_client.get(cache_key)
-        if is_processed:
+        # Атомарно устанавливаем ключ, ТОЛЬКО если он не существует (nx=True).
+        # Команда вернет True, если ключ был успешно установлен (т.е. мы первые).
+        # Команда вернет False, если ключ уже существовал (т.е. мы дубликат).
+        is_first = await redis_client.set(cache_key, "1", ex=10, nx=True)
+        
+        # Если это не первое сообщение в группе, выходим.
+        if not is_first:
             logging.info(f"Игнорируем дубликат из медиа-группы {message.media_group_id}")
-            return  # Просто выходим, ничего не делая
-
-        # Если это первое сообщение из группы, ставим флаг в Redis на 10 секунд
-        await redis_client.set(cache_key, "1", ex=10)
+            return
 
     user_lock = user_locks[message.from_user.id]
     if user_lock is None:
