@@ -374,79 +374,82 @@ async def fetch_posts_for_channel(channel: Channel, db_session: AsyncSession, po
         if client is None:
             logging.error("Telethon client не инициализирован!")
             return
-
+            
         entity = await get_cached_entity(channel)
         if not entity: 
             return
-
-        # Шаг 1: Получаем последние сообщения
+        
+        # Шаг 1: Получаем последние сообщения из Telegram
         messages = [
             msg async for msg in client.iter_messages(entity, limit=post_limit) 
             if msg and (getattr(msg, 'text', None) or getattr(msg, 'media', None))
         ]
-
+        
         if not messages:
-            logging.info(f"Нет новых постов для «{channel.title}»")
             return
 
-        # Шаг 2: Группируем сообщения по ID альбома (grouped_id)
+        # Шаг 2: Группируем сообщения в альбомы
         grouped_messages = defaultdict(list)
         for msg in messages:
-            # Если у сообщения есть grouped_id, используем его как ключ. Иначе — ID самого сообщения.
             key = msg.grouped_id or msg.id 
             grouped_messages[key].append(msg)
 
-        # Шаг 3: Обрабатываем каждую группу (пост или альбом)
+        # --- НОВАЯ ЭФФЕКТИВНАЯ ЛОГИКА ---
+
+        # Шаг 3: Узнаем, какие из этих постов УЖЕ есть в нашей базе данных
+        main_message_ids = [group[0].id for group in grouped_messages.values()]
+        stmt = select(Post.message_id).where(
+            Post.channel_id == channel.id,
+            Post.message_id.in_(main_message_ids)
+        )
+        result = await db_session.execute(stmt)
+        existing_message_ids = {row[0] for row in result.fetchall()}
+
+        # Шаг 4: Оставляем для обработки только те группы, которых НЕТ в базе
+        new_groups = {
+            group_id: message_group for group_id, message_group in grouped_messages.items()
+            if message_group[0].id not in existing_message_ids
+        }
+
+        if not new_groups:
+            logging.info(f"Для «{channel.title}» нет новых постов.")
+            return
+        
+        logging.info(f"Для «{channel.title}» найдено {len(new_groups)} новых постов/групп для обработки.")
+
+        # Шаг 5: Теперь скачиваем медиа и готовим посты ТОЛЬКО для новых групп
         posts_to_insert = []
-        for group_id, message_group in grouped_messages.items():
-            # В группе сообщений с медиа, текст обычно прикреплен к первому
+        for group_id, message_group in new_groups.items():
             message_group.sort(key=lambda m: m.id)
             main_message = message_group[0]
-
-            # Создаем "скелет" поста из главного сообщения
             post_data = await create_post_dict(main_message, channel.id)
-
-            # Собираем медиа со ВСЕХ сообщений в группе
+            
             media_list = []
-            media_upload_tasks = []
+            if any(getattr(msg, 'media', None) for msg in message_group):
+                media_upload_tasks = [
+                    upload_media_to_s3(msg_in_group, channel.id)
+                    for msg_in_group in message_group if getattr(msg_in_group, 'media', None)
+                ]
+                media_results = await asyncio.gather(*media_upload_tasks)
+                media_list = [item for _, item in media_results if item]
 
-            for msg_in_group in message_group:
-                if getattr(msg_in_group, 'media', None):
-                    media_upload_tasks.append(upload_media_to_s3(msg_in_group, channel.id))
-
-            # Выполняем все задачи по загрузке медиа параллельно для скорости
-            media_results = await asyncio.gather(*media_upload_tasks)
-
-            # Собираем успешные результаты загрузки
-            for _, media_item in media_results: # _ это message_id, он нам тут не нужен
-                if media_item:
-                    media_list.append(media_item)
-
-            # Если у поста нет ни текста, ни медиа, пропускаем его
             if not media_list and not post_data.get('text'):
                 continue
-
-            # Добавляем весь список медиа в наш "скелет" поста
+            
             post_data['media'] = media_list
             posts_to_insert.append(post_data)
 
         if not posts_to_insert:
-            logging.info(f"Для «{channel.title}» не найдено постов для вставки после группировки.")
             return
 
-        # Шаг 4: Вставляем в БД уже сгруппированные посты
-        stmt = insert(Post).values(posts_to_insert).on_conflict_do_nothing(
-            index_elements=['channel_id', 'message_id']
-        ).returning(Post.id) # Используем .id для подсчета
-
-        result = await db_session.execute(stmt)
-        new_items_count = len(result.fetchall())
+        # Шаг 6: Сохраняем в БД только действительно новые посты
+        stmt = insert(Post).values(posts_to_insert)
+        await db_session.execute(stmt)
         await db_session.commit()
 
-        logging.info(f"Для «{channel.title}» обработано {len(grouped_messages)} постов/групп. Найдено новых: {new_items_count}")
-        if new_items_count > 0:
-            await worker_stats.increment_posts(new_items_count)
-
+        logging.info(f"В БД для «{channel.title}» добавлено {len(posts_to_insert)} новых постов.")
+        await worker_stats.increment_posts(len(posts_to_insert))
+            
     except Exception as e:
         logging.error(f"Критическая ошибка при обработке «{channel.title}»: {e}", exc_info=True)
         await worker_stats.increment_errors()
