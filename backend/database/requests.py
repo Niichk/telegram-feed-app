@@ -5,6 +5,7 @@ from sqlalchemy import select, and_
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 import logging
+from typing import Optional
 
 
 async def add_subscription(
@@ -12,7 +13,7 @@ async def add_subscription(
     user_id: int,
     channel_id: int,
     channel_title: str,
-    channel_un: str
+    channel_un: Optional[str]
 ) -> tuple[str, Channel | None]:
 
     logging.info(f"🔍 add_subscription вызвана: user_id={user_id}, channel_id={channel_id}, title={channel_title}")
