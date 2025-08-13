@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, String, ForeignKey, Text, DateTime, Index, UniqueConstraint
+from sqlalchemy import BigInteger, String, ForeignKey, Text, DateTime, Index, UniqueConstraint, Boolean
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.ext.asyncio import AsyncAttrs
@@ -13,9 +13,10 @@ class User(Base):
     __tablename__ = 'users'
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    # Mapped[str] = mapped_column(String(150), nullable=True) # УДАЛЕНО
-    # Mapped[str] = mapped_column(String(150), nullable=True) # УДАЛЕНО
     subscription_count: Mapped[int] = mapped_column(default=0, server_default="0", nullable=False)
+
+    is_premium: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+    premium_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Аудит
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
